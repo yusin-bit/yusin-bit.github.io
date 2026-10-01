@@ -1,0 +1,66 @@
+const fruits = [
+    {
+      id: 1,
+      name: "수박",
+      img: "img/watermelon.jpg",
+      content: "당도선별 프리미엄 고당도 하우스수박 5~6kg",
+      price: 29000,
+    },
+    {
+      id: 2,
+      name: "참외",
+      img: "img/orientalmelon.jpg",
+      content: "산지직송 성주 달콤참외 3kg",
+      price: 16900,
+    },
+    {
+      id: 3,
+      name: "사과",
+      img: "img/apple.jpg",
+      content: "고씨네농장 고당도 청송사과, 햇부사 5kg",
+      price: 13000,
+    },
+    {
+      id: 4,
+      name: "바나나",
+      img: "img/banana.jpg",
+      content: "델몬트 필리핀 바나나 6kg",
+      price: 15000,
+    },
+    {
+      id: 5,
+      name: "딸기",
+      img: "img/strawberry.jpg",
+      content: "설향 딸기, 킹스베리 1박스",
+      price: 14500,
+    },
+    {
+      id: 6,
+      name: "오렌지",
+      img: "img/orange.jpg",
+      content: "캘리포니아 네이블 오렌지 4kg",
+      price: 17000,
+    },
+    {
+      id: 7,
+      name: "토마토",
+      img: "img/tomato.jpg",
+      content: "행복한 농부 완숙찰토마토 5kg",
+      price: 20000,
+    },
+    {
+      id: 8,
+      name: "포도",
+      img: "img/grape.jpg",
+      content: "팜앤프룻 프리미엄 아삭한 애플청포도",
+      price: 25000,
+    },
+    {
+      id: 9,
+      name: "망고",
+      img: "img/mango.jpg",
+      content: "프리미엄 제주애플망고 1박스",
+      price: 18500,
+    },
+  ];
+  

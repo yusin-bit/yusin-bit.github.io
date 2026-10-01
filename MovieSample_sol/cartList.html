@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Insert title here</title>
+<link  rel="stylesheet" type="text/css" href="css/basic.css"  />
+<style type="text/css">
+.poster {
+	width : 150px;
+	height : 150px;
+	
+}
+
+a{text-decoration: none}
+</style>
+
+</head>
+<body>
+
+<hr>
+		<article class="main">
+		<section>
+			<table width="80%"  align="center"  >
+			<caption class="caption">찜 리스트</caption>
+			<thead>
+				<tr><th>이미지</th><th>상품번호</th><th>상품이름</th><th>가격</th><th>삭제</th></tr>
+			</thead>
+			<tbody id="content">
+			   <!-- 찜목록 출력 -->
+			    
+			</tbody>
+			</table>
+		</section>
+		<section  class="toalprice" id="price">
+			<!-- 가격 -->
+		</section>
+		<section class="link">
+			<table   align="center">
+			<tr><td align="center">
+				<a href="">주문하러 가기</a> 
+				<a href="index.html">DVD LIST</a> 
+			</td></tr>
+			</table>
+		</section>
+		</article>
+		
+		
+		<script type="text/javascript">
+		
+				//localStorage정보 읽어오기
+				const refreshPage = function (){
+					let str="";
+					let totalPrice=0;
+		  
+					for(let i =0; i < localStorage.length ; i++){
+						let key = localStorage.key(i);  //1001
+						let value = localStorage.getItem(key);//쿵푸팬더,img/movie_image2.jpg,3000
+					   
+						//value의 값을 , 기준으로 분리 
+						let arr = value.split(",");
+						
+						str+=`<tr>`;
+						str+=`<td><img src="${arr[1]}" class='poster'></td>`;
+						str+=`<td>${key}</td>`;
+						str+=`<td>${arr[0]}</td>`;
+						str+=`<td>${parseInt(arr[2]).toLocaleString()}원</td>`;
+						// str+=`<td><button type='button'  name="delItem" id="${key}" onclick="cartDel(${key})">삭제</button></td>`;
+						 str+=`<td><button type='button'  id='${key}' name='delItem'>삭제</button></td>`;
+						str+=`</tr>`;
+						
+						//가격 누적
+						totalPrice += parseInt(arr[2]);
+					
+					}//for문끝
+					
+					//alert(str)
+					//테이블에 추가
+					document.querySelector("#content").innerHTML=str;
+					
+					//가격추가
+					document.querySelector("#price").innerHTML="<b>주문가격 : " + totalPrice.toLocaleString() + "원</b>";
+				   
+				}//함수끝
+				
+				
+				/*const cartDel = (delKey)=>{
+					if( confirm("정말 삭제하실래요?") ){
+					  localStorage.removeItem( delKey );
+					   refreshPage();
+				  }
+				};*///삭제끝
+
+				//동적으로 생성된 삭제버튼에  이벤트 적용
+				document.body.addEventListener('click', function(event) {
+					if (event.target.matches('[name=delItem]')) {
+						let key = event.target.getAttribute("id"); // 
+					    if( confirm("정말 삭제하실래요?") ){
+							localStorage.removeItem( key );
+							refreshPage();
+						}
+					}
+   			 });
+				
+				
+			refreshPage();
+		
+		  </script>	
+</body>
+</html>

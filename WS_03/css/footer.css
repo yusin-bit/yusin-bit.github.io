@@ -1,0 +1,12 @@
+ footer{
+  background-color: aliceblue;
+  border-top: 1px solid blue;
+  margin-top: 10px;
+  padding: 10px;
+}
+
+ footer ul li{
+    list-style-type: none;
+    text-align: right ;
+    padding-right: 10px;
+}

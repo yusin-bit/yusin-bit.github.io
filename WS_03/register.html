@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+ <link rel="stylesheet" href="css/navbar.css" type="text/css" />
+  <link rel="stylesheet" href="css/common.css" type="text/css" />
+  <link rel="stylesheet" href="css/footer.css" type="text/css" />
+  <title>IT's KOSTA - register</title>
+  <style>
+  main{
+      padding: 20px 0px;/*상하 좌우*/
+    }
+    main h1{
+      text-align: center;
+      padding: 5px;
+    }
+
+    main form{
+       height: 350px;
+       border: 1px solid gray;
+       padding: 40px;
+    }
+
+    main .form-item{
+      margin-bottom: 10px;
+    }
+
+     main .form-item label{
+        display: inline-block;
+        width: 150px;
+        font-size: 18px;
+
+     }
+
+    main .form-item input{
+      font-size: 18px;
+      border: 1px skyblue solid;
+      width: 200px;
+    }
+
+    main form button{
+      float:right;
+      width: 120px;
+      font-size: 18px;
+      padding: 5px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+<header>
+    <nav>
+    <!-- 5개의 메뉴생성 -->
+      <ul>
+        <li class="logo"><a href="index.html"><img src="images/logo.jpg" alt="로고입니다." ></a></li>
+        <li><a href="./personal.html">개인</a></li>
+        <li><a href="busines.html">기업</a></li>
+        <li><a href="login.html">로그인</a></li>
+        <li><a href="register.html">회원가입</a></li>
+      </ul> 
+    </nav>
+  </header>
+  
+ <div id="banner">지금 당신의 행복! IT's KOSTA Life!</div> 
+
+  <main>
+  <h1>Register</h1>
+  <form action="index.html" method="get" novalidate="novalidate">
+   <div class="form-item">
+    <label for="name">이름</label>
+    <input type="text" id="name" name="name" required="required" autofocus>
+   </div>
+   
+   <div class="form-item">
+    <label for="email">이메일</label>
+    <input type="email" id="email" name="email" required >
+   </div>
+
+    <div class="form-item">
+      <label for="phone">연락처</label>
+      <input type="text" id="phone" name="phone">
+    </div>
+
+    <div class="form-item">
+    <label for="password">비밀번호</label>
+    <input type="password" id="password" name="password">
+    </div>
+
+    <div class="form-item">
+    <label for="password2">비밀번호 확인</label>
+    <input type="password" id="password2" name="password2">
+  
+   </div>
+
+    <hr>
+    <button id="btnRegister" type="button">회원 가입</button>
+  </form>
+  </main>
+
+   <footer>
+      <ul>
+        <li>경기도 성남시 오리역 한국소프트웨어진흥협회</li>
+        <li>02-0000-0000</li>
+      </ul>
+  </footer>
+
+
+	<script type="text/javascript">
+		
+			//가입 버튼 클릭
+			document.querySelector("#btnRegister").addEventListener("click", function(){
+	  
+			let state=true; // forEach를 빠져나가기위한 상태변수 
+			
+			// validateCheck ( document.querySelector("#email") )
+			// validateCheck ( document.querySelector("#id") )
+			// validateCheck ( document.querySelector("#name") )
+			// validateCheck ( document.querySelector("#password") )
+			// validateCheck ( document.querySelector("#email") )
+			
+
+			document.querySelectorAll("input").forEach(function(item, index){ //5개 
+				//각 item마다 유효성 체크를 하자.
+          // if(validateCheck(item)){// item은 input 요소
+          //   return ; //함수를 빠져나가라
+          // }
+
+				if(state){
+					console.log(1);
+					if( validateCheck(item)){ //유효성체크에서 실패
+						state=false; 
+						//return;// 함수를빠져나가라.
+					}
+				  }
+			});
+			
+			////위의 유효성체크가 성공하면..다음 일을 한다.///////////////////////////////////////////
+			if(state){
+				let email = document.querySelector("#email");
+			   if(email.value.indexOf("@")==-1){
+            alert("이메일형식이 아닙니다.")
+            email.value="";
+            email.focus();
+            return;
+			   }
+			
+			   
+			   let password = document.querySelector("#password");
+			   let password2 = document.querySelector("#password2");
+
+			   if(password.value !== password2.value){
+				  alert("비밀번호가 일치하지 않습니다.");
+				
+				 let pwdEle = document.querySelectorAll("[type='password']"); //[password1 ,password2]
+				 pwdEle.forEach(function(item,index){
+					  item.value=""; 
+				   });
+				
+				password.focus(); //커서놓기
+				return;//함수빠져나가라
+			 }
+			
+
+			   //document.querySelector("form").submit();//전송(form의 action으로 설정한 곳으로 이동)
+			   location.href="index.html";//폼전송안함(오직이동만한다)
+			}//if문끝
+			
+		 }
+			
+	);
+	
+	
+	//유효성 체크 (input요소를 객체로 전달받아 값 입력 체크 없으면 커서 놓기 )
+const validateCheck = function (obj){
+		if(obj.value===""){//obj가 이름, 이메일, 연락, 비번....
+			alert("값을 입력해주세요.");
+			obj.focus();
+			return true;//유효성체크 실패
+		}else{
+			return false;//유효성체크 성공
+		}
+	}//validateCheck end
+</script>
+</body>
+</html>

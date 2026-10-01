@@ -1,0 +1,21 @@
+.banner {
+  height:400px; 
+  background-image: url('img/slider.jpg');
+  background-size: cover;
+  background-position: center;
+  margin-bottom: 30px;
+ }
+
+
+.card img {
+  max-height: 180px;
+  object-fit: contain;
+  margin-top: 20px;
+
+}
+
+.start{transform:scale(0)}
+.end{transform:scale(1);transition:all .5s}
+
+
+

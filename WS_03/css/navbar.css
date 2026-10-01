@@ -1,0 +1,41 @@
+ header nav ul li a{
+    text-decoration: none;
+}
+
+/* 한번도 방문한적이 없는경우*/
+ header nav ul li a:link{
+   color: red;
+}
+
+/* 방문한적이 있는 경우 - 보안상 color만 가능*/
+ header nav ul li a:visited{
+  color: green;
+}
+/*마우스 올렸을 때*/
+ header nav ul li a:hover{
+   color: blueviolet; 
+   text-decoration: underline;
+}
+
+/*메뉴를 가로 방향 */
+nav ul {
+  display:flex;  
+  justify-content: center;
+  align-items: center;
+}
+
+nav ul li{
+    list-style-type: none;
+    margin:0px 10px ; /*상하    좌우*/
+}
+
+nav ul li a img{
+    width: 40px; height: 40px;
+    border-radius: 20px;
+}
+
+nav{
+    background-color:aliceblue;
+     padding: 5px;
+}
+

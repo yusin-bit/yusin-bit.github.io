@@ -1,0 +1,15 @@
+#banner{
+    background-color: aqua;
+    color: white;
+    font-size: xx-large;
+    text-align: center;
+    padding: 30px;
+    text-shadow: 5px 5px 5px blue;
+}
+/* width, height 설정할 때 padding, border 의 크기를
+  width, height의 크기를 유지하면서  width, height 내에  
+  padding, border 가 설정된다*/
+*{
+    box-sizing: border-box;
+}
+
