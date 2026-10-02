@@ -95,6 +95,21 @@
     .project h3 { margin: .45rem 0; font-size: 1.35rem; }
     .project p { margin: 0; color: var(--muted); }
     .project .open { margin-top: auto; padding-top: 1rem; font-size: .88rem; font-weight: 800; }
+    .tags { display: flex; flex-wrap: wrap; gap: .4rem; margin: .9rem 0 0; padding: 0; list-style: none; }
+    .tags li { padding: .1rem .55rem; color: var(--muted); background: var(--paper); border: 1px solid var(--line); font-size: .78rem; font-weight: 700; }
+    .btn {
+      display: inline-block;
+      margin-top: 1.2rem;
+      padding: .7rem 1.4rem;
+      color: var(--white);
+      background: var(--ink);
+      font-weight: 800;
+      text-decoration: none;
+      transition: background .18s ease;
+    }
+    .btn:hover, .btn:focus { background: var(--accent); }
+    footer p { margin: .2rem 0; }
+    footer a { color: #fff; }
     footer { padding: 1.5rem 5%; color: #dce3df; background: var(--ink); text-align: center; font-size: .88rem; }
     @media (max-width: 680px) {
       .topbar { align-items: flex-start; flex-direction: column; gap: .35rem; }
@@ -126,6 +141,7 @@
         <span class="eyebrow">JAVA · DATABASE · FRONTEND</span>
         <h1 id="hero-title">Backend Developer<br>in Training</h1>
         <p>Java를 중심으로 백엔드 개발을 공부하고 있습니다. 현재 KOSTA 교육과정에서 Java · Database · FrontEnd · Git을 학습하고 있습니다.</p>
+        <a class="btn" href="#projects">프로젝트 보기 ↓</a>
       </div>
       <div class="hero-mark"><img src="./images/study-desk.png" alt="노트북과 노트가 놓인 공부 책상 AI 생성 이미지" width="1402" height="1122"></div>
     </section>
@@ -135,22 +151,26 @@
       <div class="projects">
         <a class="project" href="./04.TodoList/todolist.html">
           <small>01 / JAVASCRIPT</small><h3>TodoList</h3>
-          <p>할 일 추가, 완료 표시, 삭제와 검색을 연습한 JavaScript 실습입니다.</p>
+          <p>할 일 추가, 체크로 완료 표시, 삭제, 검색어로 목록 걸러 보기를 만들어 봤습니다. 배열을 바꾸고 화면을 다시 그리는 흐름을 연습했습니다.</p>
+          <ul class="tags"><li>HTML</li><li>CSS</li><li>JavaScript</li></ul>
           <span class="open">프로젝트 열기 ↗</span>
         </a>
         <a class="project" href="./fruits_shop_temp/index.html">
           <small>02 / FRONTEND</small><h3>my fruits Shop</h3>
-          <p>상품 검색과 정렬, 과일·채소 목록 표시를 구현한 쇼핑몰 실습입니다.</p>
+          <p>과일 이름 검색과 가격순·이름순 정렬, 채소 3개씩 더보기를 만들었습니다. 상품을 누르면 주소의 id 값으로 상세 페이지를 보여주는 방식도 연습했습니다.</p>
+          <ul class="tags"><li>Bootstrap</li><li>JavaScript</li></ul>
           <span class="open">프로젝트 열기 ↗</span>
         </a>
         <a class="project" href="./WS_03/index.html">
           <small>03 / HTML · CSS · JS</small><h3>KOSTA Bank</h3>
-          <p>메뉴와 배너, 카드형 콘텐츠로 은행 메인 화면을 구성한 웹 실습입니다.</p>
+          <p>1초마다 문구가 바뀌는 배너와 버튼 클릭 시 data 속성 값 읽기를 연습했습니다. 로그인·회원가입에서는 빈칸, 이메일 형식, 비밀번호 일치 여부를 확인합니다.</p>
+          <ul class="tags"><li>HTML</li><li>CSS Grid</li><li>JavaScript</li></ul>
           <span class="open">프로젝트 열기 ↗</span>
         </a>
         <a class="project" href="./MovieSample_sol/index.html">
           <small>04 / MEDIA UI</small><h3>Movie</h3>
-          <p>영화 목록과 영상 미리보기, 찜하기 기능을 살펴볼 수 있는 화면입니다.</p>
+          <p>버튼을 누르면 영상이 바뀌는 미리보기와, 찜한 영화를 브라우저에 저장해 찜 목록 페이지에서 보여주고 삭제·합계 금액을 계산하는 기능을 연습했습니다.</p>
+          <ul class="tags"><li>HTML</li><li>CSS</li><li>JavaScript</li><li>localStorage</li></ul>
           <span class="open">프로젝트 열기 ↗</span>
         </a>
       </div>
@@ -164,16 +184,19 @@
     <section class="section" id="skills" aria-labelledby="skills-title">
       <div class="section-heading"><span>WHAT I'M LEARNING</span><h2 id="skills-title">Skills</h2></div>
       <div class="skills">
-        <div class="skill"><strong>Java</strong><span>Practicing</span></div>
-        <div class="skill"><strong>JavaScript</strong><span>Learning</span></div>
-        <div class="skill"><strong>HTML / CSS</strong><span>Basic</span></div>
-        <div class="skill"><strong>MySQL</strong><span>Practicing</span></div>
-        <div class="skill"><strong>JDBC</strong><span>Learning</span></div>
-        <div class="skill"><strong>Git / GitHub</strong><span>Learning</span></div>
+        <div class="skill"><strong>Java</strong><span>기초 문법 연습, 미니 대여 서비스 팀 프로젝트 경험</span></div>
+        <div class="skill"><strong>JavaScript</strong><span>DOM 조작, 이벤트, localStorage 연습</span></div>
+        <div class="skill"><strong>HTML / CSS</strong><span>Grid, Bootstrap으로 화면 구성 연습</span></div>
+        <div class="skill"><strong>MySQL</strong><span>데이터베이스 기초 학습</span></div>
+        <div class="skill"><strong>JDBC</strong><span>Java에서 데이터베이스 연결 학습</span></div>
+        <div class="skill"><strong>Git / GitHub</strong><span>GitHub Pages로 이 포트폴리오 배포</span></div>
       </div>
     </section>
   </main>
 
-  <footer>Java 백엔드 개발을 배우며 만든 프로젝트를 기록합니다.</footer>
+  <footer>
+    <p>Java 백엔드 개발을 배우며 만든 프로젝트를 기록합니다.</p>
+    <p>Contact · <a href="mailto:yujeonghyeon345@gmail.com">yujeonghyeon345@gmail.com</a></p>
+  </footer>
 </body>
 </html>
