@@ -1193,6 +1193,8 @@ public class LocalWebApplication {
         headers.set("X-Content-Type-Options", "nosniff");
         headers.set("X-Frame-Options", "DENY");
         headers.set("Referrer-Policy", "no-referrer");
+        // HTTPS 로만 접속하도록 브라우저에 알림 (로컬 http 에서는 브라우저가 무시)
+        headers.set("Strict-Transport-Security", "max-age=31536000");
     }
 
     /** JSON 문자열 이스케이프: 따옴표·역슬래시·제어문자, 그리고 HTML 로 해석될 수 있는 < > & 까지 */
