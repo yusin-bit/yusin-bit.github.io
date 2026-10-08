@@ -15,17 +15,31 @@ public final class AdminDtos {
 			int requested, int inProgress, int completed, int rejected) { }
 
 	/** 회원 목록 한 줄 */
-	public record UserRow(String id, String nickName, String name, String phone, int itemCount, int rentalCount) { }
+	public record UserRow(String id, String nickName, String name, String phone, int itemCount, int rentalCount,
+			boolean suspended, String suspendReason) { }
+
+	/** 관리자 계정 */
+	public record AdminRow(String id, String name) { }
+
+	/** 공지사항 */
+	public record NoticeRow(int noticeNum, String title, String content, boolean active, String adminId,
+			String createAt, String updateAt) { }
+
+	/** 관리자 활동 기록 */
+	public record LogRow(int logNum, String adminId, String action, String detail, int result, String ip, String createAt) { }
+
+	/** 순위 통계 한 줄 (이름 + 건수) */
+	public record StatRow(String label, int count) { }
 
 	/** 게시글 목록 한 줄 */
-	public record PostRow(int postNum, String title, String itemName, String lenderId,
+	public record PostRow(int postNum, String title, String content, String itemName, String lenderId,
 			String rentDate, String returnDate, String addr, boolean available, int rentalCount) { }
 
 	/** 대여 목록 한 줄 */
 	public record RentalRow(int rentalNum, int postNum, String itemName, String lenderId, String borrowerId, int status) { }
 
 	/** 물품 목록 한 줄: activeRentals = 진행 중(승인~반납 확인 대기) 대여 건수 */
-	public record ItemRow(int itemNum, String itemName, String lenderId, String bigCategory, String smallCategory,
+	public record ItemRow(int itemNum, String itemName, String lenderId, String smallCategoryCode, String bigCategory, String smallCategory,
 			boolean available, int postCount, int activeRentals) { }
 
 	/** 카테고리 한 줄 (대분류 + 소분류, 소분류가 없으면 smallCode 가 null) */

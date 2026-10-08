@@ -34,6 +34,11 @@ public class UserRepositoryImpl implements UserRepository {
 			rs = ps.executeQuery();
 
 			if (rs.next() && PasswordHasher.matches(request.getPassword(), rs.getString("PassWord"))) {
+				// 관리자가 이용 정지한 계정은 비밀번호가 맞아도 로그인할 수 없다 (웹·콘솔 공통)
+				if (rs.getBoolean("Suspended")) {
+					String reason = rs.getString("SuspendReason");
+					throw new UserException("이용이 정지된 계정입니다." + (reason == null || reason.isBlank() ? "" : " 사유: " + reason));
+				}
 				user = new User(rs.getString("ID"), rs.getString("PassWord"), rs.getString("NickName"),
 						rs.getString("Name"), rs.getString("Phone"));
 				// 예전 평문 비밀번호는 로그인 성공 시 해시로 바꿔 저장

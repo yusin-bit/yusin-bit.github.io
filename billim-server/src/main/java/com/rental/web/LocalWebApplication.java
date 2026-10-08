@@ -26,6 +26,10 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import main.java.com.rental.admin.dto.AdminDtos.AdminAccount;
+import main.java.com.rental.admin.dto.AdminDtos.AdminRow;
+import main.java.com.rental.admin.dto.AdminDtos.LogRow;
+import main.java.com.rental.admin.dto.AdminDtos.NoticeRow;
+import main.java.com.rental.admin.dto.AdminDtos.StatRow;
 import main.java.com.rental.admin.dto.AdminDtos.CategoryRow;
 import main.java.com.rental.admin.dto.AdminDtos.ItemRow;
 import main.java.com.rental.admin.dto.AdminDtos.PostRow;
@@ -178,6 +182,88 @@ public class LocalWebApplication {
             adminService.restoreItem(intParam(form, "itemNum"));
             return "물품을 대여 가능 상태로 되돌렸습니다.";
         }));
+        // ---- 관리자 확장: 회원 정지/수정/삭제, 게시글 수정, 대여 강제 처리, 물품 수정
+        api(server, "/api/admin/users/suspend", ex -> adminAction(ex, form -> {
+            String userId = form.getOrDefault("userId", "").trim();
+            adminService.suspendUser(userId, form.get("reason"));
+            endSessionsOf(userId, null);
+            return userId + " 회원을 이용 정지했습니다.";
+        }));
+        api(server, "/api/admin/users/unsuspend", ex -> adminAction(ex, form -> {
+            adminService.unsuspendUser(form.getOrDefault("userId", "").trim());
+            return "이용 정지를 해제했습니다.";
+        }));
+        api(server, "/api/admin/users/update", ex -> adminAction(ex, form -> {
+            adminService.updateUser(form.getOrDefault("userId", "").trim(), form.get("nickname"), form.get("name"), form.get("phone"));
+            return "회원 정보를 수정했습니다.";
+        }));
+        api(server, "/api/admin/users/delete", ex -> adminAction(ex, form -> {
+            String userId = form.getOrDefault("userId", "").trim();
+            adminService.deleteUser(userId);
+            endSessionsOf(userId, null);
+            return userId + " 회원을 삭제했습니다.";
+        }));
+        api(server, "/api/admin/posts/update", ex -> adminAction(ex, form -> {
+            String title = form.getOrDefault("title", "").trim(), content = form.getOrDefault("content", "").trim();
+            String addr = form.getOrDefault("addr", "").trim();
+            String[] dates = validPostInput(title, content, form.get("rentDate"), form.get("returnDate"), addr);
+            adminService.updatePost(intParam(form, "postNum"), title, content, dates[0], dates[1], addr);
+            return "게시글을 수정했습니다.";
+        }));
+        api(server, "/api/admin/rentals/force-cancel", ex -> adminAction(ex, form -> {
+            adminService.forceCancelRental(intParam(form, "rentalNum"));
+            return "대여를 강제 취소했습니다.";
+        }));
+        api(server, "/api/admin/rentals/force-complete", ex -> adminAction(ex, form -> {
+            adminService.forceCompleteRental(intParam(form, "rentalNum"));
+            return "대여를 강제 완료 처리했습니다.";
+        }));
+        api(server, "/api/admin/items/update", ex -> adminAction(ex, form -> {
+            adminService.updateItem(intParam(form, "itemNum"), form.get("itemName"), form.get("smallCategoryCode"));
+            return "물품 정보를 수정했습니다.";
+        }));
+        // ---- 관리자 계정
+        api(server, "/api/admin/admins", this::adminAccounts);
+        api(server, "/api/admin/admins/create", ex -> adminAction(ex, form -> {
+            adminService.addAdmin(form.getOrDefault("id", "").trim(), form.get("name"), form.get("password"));
+            return "관리자를 추가했습니다.";
+        }));
+        api(server, "/api/admin/admins/delete", ex -> adminAction(ex, form -> {
+            String target = form.getOrDefault("adminId", "").trim();
+            adminService.deleteAdmin(currentAdminId(ex), target);
+            adminSessions.values().removeIf(s -> s.admin().id().equals(target));
+            return "관리자를 삭제했습니다.";
+        }));
+        api(server, "/api/admin/password", ex -> adminAction(ex, form -> {
+            String me = currentAdminId(ex);
+            adminService.changeOwnPassword(me, form.get("currentPassword"), form.get("newPassword"));
+            String keep = bearerToken(ex);
+            adminSessions.entrySet().removeIf(e -> e.getValue().admin().id().equals(me) && !e.getKey().equals(keep));
+            return "관리자 비밀번호를 변경했습니다.";
+        }));
+        // ---- 공지사항
+        api(server, "/api/notices", this::publicNotices);
+        api(server, "/api/admin/notices", this::adminNotices);
+        api(server, "/api/admin/notices/create", ex -> adminAction(ex, form -> {
+            adminService.addNotice(form.get("title"), form.get("content"), currentAdminId(ex));
+            return "공지를 등록했습니다.";
+        }));
+        api(server, "/api/admin/notices/update", ex -> adminAction(ex, form -> {
+            adminService.updateNotice(intParam(form, "noticeNum"), form.get("title"), form.get("content"));
+            return "공지를 수정했습니다.";
+        }));
+        api(server, "/api/admin/notices/toggle", ex -> adminAction(ex, form -> {
+            boolean active = "true".equals(form.get("active"));
+            adminService.setNoticeActive(intParam(form, "noticeNum"), active);
+            return active ? "공지를 게시했습니다." : "공지를 내렸습니다.";
+        }));
+        api(server, "/api/admin/notices/delete", ex -> adminAction(ex, form -> {
+            adminService.deleteNotice(intParam(form, "noticeNum"));
+            return "공지를 삭제했습니다.";
+        }));
+        // ---- 활동 기록 / 통계
+        api(server, "/api/admin/logs", this::adminLogs);
+        api(server, "/api/admin/stats", this::adminStats);
         api(server, "/api/admin/categories", this::adminCategories);
         api(server, "/api/admin/categories/big/create", ex -> adminAction(ex, form ->
                 "대분류 " + adminService.addBigCategory(form.get("name")) + " 을(를) 추가했습니다."));
@@ -236,9 +322,30 @@ public class LocalWebApplication {
         if (!path.startsWith("/api/admin/") || !"POST".equalsIgnoreCase(exchange.getRequestMethod())) return;
         String token = bearerToken(exchange);
         AdminSession session = token == null ? null : adminSessions.get(token);
-        String who = session != null ? session.admin().id() : "-";
+        Object fixedWho = exchange.getAttribute("auditAdmin");
+        String who = fixedWho != null ? fixedWho.toString() : session != null ? session.admin().id() : "-";
+        Object detailAttr = exchange.getAttribute("auditDetail");
+        String detail = detailAttr == null ? "" : detailAttr.toString();
+        int status = exchange.getResponseCode();
         System.out.println("[admin-audit] " + java.time.Instant.now() + " admin=" + who + " ip=" + ip
-                + " " + path + " status=" + exchange.getResponseCode());
+                + " " + path + " " + detail + " status=" + status);
+        // 서버가 재시작돼도 남도록 DB(AdminLog)에도 저장 → 관리자 화면 "활동 기록"에서 확인
+        adminService.log(who, path.substring("/api/admin/".length()), detail.length() > 255 ? detail.substring(0, 255) : detail, status, ip);
+    }
+
+    // 감사 기록에 남겨도 되는 값만 (비밀번호·공지 본문 같은 값은 기록하지 않음)
+    private static final List<String> AUDIT_FIELDS = List.of("id", "userId", "adminId", "itemNum", "postNum",
+            "rentalNum", "noticeNum", "code", "bigCode", "name", "active", "reason");
+
+    private static String auditDetail(Map<String, String> form) {
+        StringBuilder sb = new StringBuilder();
+        for (String key : AUDIT_FIELDS) {
+            String value = form.get(key);
+            if (value == null || value.isBlank()) continue;
+            String v = value.strip();
+            sb.append(sb.length() > 0 ? " " : "").append(key).append('=').append(v.length() > 40 ? v.substring(0, 40) + "…" : v);
+        }
+        return sb.toString();
     }
 
     private void addCorsHeaders(HttpExchange exchange) {
@@ -936,6 +1043,7 @@ public class LocalWebApplication {
             String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
             long now = System.currentTimeMillis();
             adminSessions.put(token, new AdminSession(admin, now, now));
+            exchange.setAttribute("auditAdmin", admin.id());
             sendJson(exchange, 200, "{\"ok\":true,\"token\":\"" + token + "\",\"admin\":{\"id\":\""
                     + json(admin.id()) + "\",\"name\":\"" + json(admin.name()) + "\"}}");
         } catch (Exception e) {
@@ -946,7 +1054,10 @@ public class LocalWebApplication {
     private void adminLogout(HttpExchange exchange) throws IOException {
         if (!method(exchange, "POST")) return;
         String token = bearerToken(exchange);
-        if (token != null) adminSessions.remove(token);
+        if (token != null) {
+            AdminSession ending = adminSessions.remove(token);
+            if (ending != null) exchange.setAttribute("auditAdmin", ending.admin().id());
+        }
         sendJson(exchange, 200, "{\"ok\":true}");
     }
 
@@ -978,6 +1089,8 @@ public class LocalWebApplication {
                     .append("\",\"phone\":\"").append(json(u.phone()))
                     .append("\",\"itemCount\":").append(u.itemCount())
                     .append(",\"rentalCount\":").append(u.rentalCount())
+                    .append(",\"suspended\":").append(u.suspended())
+                    .append(",\"suspendReason\":\"").append(json(u.suspendReason())).append('"')
                     .append(",\"locked\":").append(loginFailures.isBlocked(u.id().toLowerCase()))
                     .append(",\"sessions\":").append(sessions.values().stream().filter(s -> s.user().getId().equals(u.id())).count())
                     .append('}');
@@ -1014,6 +1127,7 @@ public class LocalWebApplication {
                 PostRow p = posts.get(i);
                 body.append(i > 0 ? "," : "").append("{\"postNum\":").append(p.postNum())
                     .append(",\"title\":\"").append(json(p.title()))
+                    .append("\",\"content\":\"").append(json(p.content()))
                     .append("\",\"itemName\":\"").append(json(p.itemName()))
                     .append("\",\"lenderId\":\"").append(json(p.lenderId()))
                     .append("\",\"rentDate\":\"").append(json(p.rentDate()))
@@ -1084,6 +1198,109 @@ public class LocalWebApplication {
         }
     }
 
+    /** 이 요청을 보낸 관리자 아이디 (requireAdmin 을 통과한 뒤에만 호출) */
+    private String currentAdminId(HttpExchange exchange) {
+        AdminSession session = adminSessions.get(bearerToken(exchange));
+        return session == null ? "-" : session.admin().id();
+    }
+
+    private void adminAccounts(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        AdminAccount me = requireAdmin(exchange);
+        if (me == null) return;
+        try {
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"me\":\"" + json(me.id()) + "\",\"admins\":[");
+            List<AdminRow> admins = adminService.admins();
+            for (int i = 0; i < admins.size(); i++) {
+                AdminRow a = admins.get(i);
+                long sessionsNow = adminSessions.values().stream().filter(s -> s.admin().id().equals(a.id())).count();
+                body.append(i > 0 ? "," : "").append("{\"id\":\"").append(json(a.id()))
+                    .append("\",\"name\":\"").append(json(a.name()))
+                    .append("\",\"sessions\":").append(sessionsNow).append('}');
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private static String noticesJson(List<NoticeRow> notices) {
+        StringBuilder body = new StringBuilder("{\"ok\":true,\"notices\":[");
+        for (int i = 0; i < notices.size(); i++) {
+            NoticeRow n = notices.get(i);
+            body.append(i > 0 ? "," : "").append("{\"noticeNum\":").append(n.noticeNum())
+                .append(",\"title\":\"").append(json(n.title()))
+                .append("\",\"content\":\"").append(json(n.content()))
+                .append("\",\"active\":").append(n.active())
+                .append(",\"adminId\":\"").append(json(n.adminId()))
+                .append("\",\"createAt\":\"").append(json(n.createAt()))
+                .append("\",\"updateAt\":\"").append(json(n.updateAt())).append("\"}");
+        }
+        return body.append("]}").toString();
+    }
+
+    /** 게시 중인 공지 (로그인 없이 누구나 조회) */
+    private void publicNotices(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        try {
+            sendJson(exchange, 200, noticesJson(adminService.notices(true)));
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void adminNotices(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            sendJson(exchange, 200, noticesJson(adminService.notices(false)));
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void adminLogs(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            List<LogRow> logs = adminService.logs(100);
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"logs\":[");
+            for (int i = 0; i < logs.size(); i++) {
+                LogRow l = logs.get(i);
+                body.append(i > 0 ? "," : "").append("{\"logNum\":").append(l.logNum())
+                    .append(",\"adminId\":\"").append(json(l.adminId()))
+                    .append("\",\"action\":\"").append(json(l.action()))
+                    .append("\",\"detail\":\"").append(json(l.detail()))
+                    .append("\",\"result\":").append(l.result())
+                    .append(",\"ip\":\"").append(json(l.ip()))
+                    .append("\",\"createAt\":\"").append(json(l.createAt())).append("\"}");
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private static String statsJson(List<StatRow> rows) {
+        StringBuilder body = new StringBuilder("[");
+        for (int i = 0; i < rows.size(); i++)
+            body.append(i > 0 ? "," : "").append("{\"label\":\"").append(json(rows.get(i).label()))
+                .append("\",\"count\":").append(rows.get(i).count()).append('}');
+        return body.append(']').toString();
+    }
+
+    private void adminStats(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            sendJson(exchange, 200, "{\"ok\":true,\"topCategories\":" + statsJson(adminService.topCategories())
+                    + ",\"topLenders\":" + statsJson(adminService.topLenders())
+                    + ",\"topBorrowers\":" + statsJson(adminService.topBorrowers()) + "}");
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
     private void adminItems(HttpExchange exchange) throws IOException {
         if (!method(exchange, "GET")) return;
         if (requireAdmin(exchange) == null) return;
@@ -1095,6 +1312,7 @@ public class LocalWebApplication {
                 body.append(i > 0 ? "," : "").append("{\"itemNum\":").append(it.itemNum())
                     .append(",\"itemName\":\"").append(json(it.itemName()))
                     .append("\",\"lenderId\":\"").append(json(it.lenderId()))
+                    .append("\",\"smallCategoryCode\":\"").append(json(it.smallCategoryCode()))
                     .append("\",\"category\":\"").append(json(it.bigCategory() + " · " + it.smallCategory()))
                     .append("\",\"available\":").append(it.available())
                     .append(",\"postCount\":").append(it.postCount())
@@ -1166,6 +1384,7 @@ public class LocalWebApplication {
         } catch (IllegalArgumentException badEncoding) {
             throw new IllegalArgumentException("요청 형식이 올바르지 않습니다.");
         }
+        if (exchange.getRequestURI().getPath().startsWith("/api/admin/")) exchange.setAttribute("auditDetail", auditDetail(values));
         return values;
     }
 
