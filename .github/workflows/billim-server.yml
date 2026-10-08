@@ -1,0 +1,36 @@
+# 빌림 API 서버(billim-server/) Docker 이미지가 정상 빌드·실행되는지 확인 (배포는 Render 가 담당)
+name: billim-server docker check
+
+on:
+  push:
+    paths:
+      - "billim-server/**"
+      - ".github/workflows/billim-server.yml"
+  workflow_dispatch:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t billim-server billim-server
+
+      - name: Run container (DB 없이 서버 기동만 확인)
+        run: |
+          docker run -d --name billim -p 8080:8080 \
+            -e PORT=8080 -e ALLOWED_ORIGINS=https://yusin-bit.github.io billim-server
+          for i in $(seq 1 30); do
+            curl -s http://127.0.0.1:8080/api/health > health.json && break
+            sleep 1
+          done
+          docker logs billim
+          echo "health: $(cat health.json)"
+          grep -q '"ok"' health.json
+
+      - name: Check CORS preflight
+        run: |
+          curl -s -i -X OPTIONS -H "Origin: https://yusin-bit.github.io" \
+            -H "Access-Control-Request-Method: POST" http://127.0.0.1:8080/api/login | tee cors.txt
+          grep -qi "access-control-allow-origin: https://yusin-bit.github.io" cors.txt
