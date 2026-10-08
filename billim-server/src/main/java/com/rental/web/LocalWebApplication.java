@@ -172,11 +172,23 @@ public class LocalWebApplication {
     }
 
     private void health(HttpExchange exchange) throws IOException {
-        if (!method(exchange, "GET")) return;
+        // 배포 환경(Render)의 헬스체크는 HEAD 요청으로 들어오므로 본문 없이 상태 코드만 돌려준다.
+        boolean head = "HEAD".equalsIgnoreCase(exchange.getRequestMethod());
+        if (!head && !method(exchange, "GET")) return;
         try (Connection connection = DBManager.getConnection()) {
+            if (head) {
+                exchange.sendResponseHeaders(200, -1);
+                exchange.close();
+                return;
+            }
             sendJson(exchange, 200, "{\"ok\":true,\"database\":\"" +
                     json(connection.getCatalog()) + "\"}");
         } catch (Exception e) {
+            if (head) {
+                exchange.sendResponseHeaders(500, -1);
+                exchange.close();
+                return;
+            }
             sendError(exchange, 500, "DB 연결 실패: " + message(e));
         }
     }

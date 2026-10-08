@@ -29,6 +29,13 @@ jobs:
           echo "health: $(cat health.json)"
           grep -q '"ok"' health.json
 
+      - name: Check HEAD health (Render 헬스체크 방식)
+        run: |
+          code=$(curl -s -I -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health)
+          echo "HEAD /api/health -> $code"
+          # DB 없이 실행하므로 500(연결 실패)이 정상. 405 면 HEAD 를 처리하지 못하는 것
+          [ "$code" != "405" ]
+
       - name: Check CORS preflight
         run: |
           curl -s -i -X OPTIONS -H "Origin: https://yusin-bit.github.io" \
