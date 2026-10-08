@@ -58,6 +58,8 @@ public class LocalWebApplication {
     private static final boolean OPEN_BROWSER = !"false".equalsIgnoreCase(env("OPEN_BROWSER", "true"));
     // 다른 도메인(예: GitHub Pages)에서 API 를 호출할 때 허용할 Origin 목록 (쉼표로 구분)
     private static final List<String> ALLOWED_ORIGINS = List.of(env("ALLOWED_ORIGINS", "").split("\\s*,\\s*"));
+    // 프록시 뒤에서 실행할 때 클라이언트 IP 로 믿을 헤더 이름 (예: Render → CF-Connecting-IP). 비우면 접속 주소 사용
+    private static final String TRUSTED_IP_HEADER = env("TRUSTED_IP_HEADER", "");
     private static final Path WEB_ROOT = Path.of("web").toAbsolutePath().normalize();
     private static final long SESSION_IDLE_MILLIS = 2 * 60 * 60 * 1000L;
     private static final long SESSION_MAX_MILLIS = 12 * 60 * 60 * 1000L;
@@ -76,6 +78,14 @@ public class LocalWebApplication {
     private final RequestLimiter apiLimiter = new RequestLimiter(300, MINUTE);
     private final RequestLimiter authLimiter = new RequestLimiter(30, MINUTE);
     private final RequestLimiter loginFailures = new RequestLimiter(5, 15 * MINUTE);
+    // 계정 탈취·도배 방지: IP 당 회원가입 1시간 5회, 아이디 찾기 1시간 10회 / 아이디 당 비밀번호 재설정 1시간 3회
+    private final RequestLimiter signupLimiter = new RequestLimiter(5, 60 * MINUTE);
+    private final RequestLimiter findIdLimiter = new RequestLimiter(10, 60 * MINUTE);
+    private final RequestLimiter resetLimiter = new RequestLimiter(3, 60 * MINUTE);
+    // 무료 DB 용량 보호: 회원 1명당 등록 가능한 물품 수
+    private static final int MAX_ITEMS_PER_USER = 30;
+    // 한 계정이 동시에 유지할 수 있는 로그인 세션 수
+    private static final int MAX_SESSIONS_PER_USER = 5;
 
     private final UserServiceImpl userService = new UserServiceImpl();
     private final CategoryServiceImpl categoryService = new CategoryServiceImpl();
@@ -181,8 +191,37 @@ public class LocalWebApplication {
         random.nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         long now = System.currentTimeMillis();
+        // 같은 계정의 세션이 너무 많으면 가장 오래된 것부터 정리
+        var mine = sessions.entrySet().stream()
+                .filter(e -> e.getValue().user().getId().equals(user.getId()))
+                .sorted((a, b) -> Long.compare(a.getValue().createdAt(), b.getValue().createdAt()))
+                .map(Map.Entry::getKey).toList();
+        for (int i = 0; i <= mine.size() - MAX_SESSIONS_PER_USER; i++) sessions.remove(mine.get(i));
         sessions.put(token, new WebSession(user, now, now));
         return token;
+    }
+
+    private int countMyItems(String userId) {
+        try {
+            return itemService.selectByUserId(userId).size();
+        } catch (Exception noItems) {
+            return 0;
+        }
+    }
+
+    /** 숫자 파라미터: 숫자가 아니면 내부 예외 문구 대신 일반 안내를 돌려준다 */
+    private static int intParam(Map<String, String> form, String key) {
+        try {
+            return Integer.parseInt(form.getOrDefault(key, "0").trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("요청 값이 올바르지 않습니다.");
+        }
+    }
+
+    private static String phoneParam(Map<String, String> form) {
+        String raw = form.getOrDefault("phone", "").trim();
+        String normalized = UserServiceImpl.normalizePhone(raw);
+        return normalized != null ? normalized : raw;
     }
 
     /** 비밀번호가 바뀐 사용자의 로그인 세션을 끊는다 (keepToken 은 유지) */
@@ -191,19 +230,17 @@ public class LocalWebApplication {
     }
 
     /**
-     * 요청한 클라이언트 IP. Render 처럼 프록시 뒤에서 실행될 때는 프록시가 붙여주는 헤더를 사용한다.
-     * (X-Forwarded-For 는 클라이언트가 앞부분을 꾸밀 수 있으므로 프록시가 마지막에 붙인 값을 사용)
+     * 요청한 클라이언트 IP.
+     * 프록시가 넣어주는 IP 헤더는 클라이언트가 위조할 수 있으므로, 환경변수 TRUSTED_IP_HEADER 로 지정한
+     * 헤더만 믿는다 (Render 는 앞단 Cloudflare 가 덮어쓰는 CF-Connecting-IP). 지정이 없으면 실제 접속 주소를 쓴다.
      */
     private static String clientIp(HttpExchange exchange) {
-        var headers = exchange.getRequestHeaders();
-        for (String name : List.of("CF-Connecting-IP", "True-Client-IP")) {
-            String value = headers.getFirst(name);
-            if (value != null && !value.isBlank()) return value.trim();
-        }
-        String forwarded = headers.getFirst("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            String[] parts = forwarded.split(",");
-            return parts[parts.length - 1].trim();
+        if (!TRUSTED_IP_HEADER.isEmpty()) {
+            String value = exchange.getRequestHeaders().getFirst(TRUSTED_IP_HEADER);
+            if (value != null && !value.isBlank()) {
+                String[] parts = value.split(",");
+                return parts[parts.length - 1].trim();
+            }
         }
         return exchange.getRemoteAddress().getAddress().getHostAddress();
     }
@@ -291,9 +328,13 @@ public class LocalWebApplication {
     private void signUp(HttpExchange exchange) throws IOException {
         if (!method(exchange, "POST")) return;
         try {
+            if (!signupLimiter.tryAcquire(clientIp(exchange))) {
+                tooManyRequests(exchange, "회원가입 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
             Map<String, String> form = readForm(exchange);
             userService.signUp(new UserSignUpRequest(form.get("id"), form.get("password"),
-                    form.get("nickname"), form.get("name"), form.get("phone")));
+                    form.get("nickname"), form.get("name"), phoneParam(form)));
             sendJson(exchange, 201, "{\"ok\":true,\"message\":\"회원 정보가 MySQL에 저장되었습니다.\"}");
         } catch (Exception e) {
             sendError(exchange, 400, message(e));
@@ -316,7 +357,11 @@ public class LocalWebApplication {
     private void findId(HttpExchange exchange) throws IOException {
         if (!method(exchange, "POST")) return;
         try {
-            String id = userService.findId(readForm(exchange).get("phone"));
+            if (!findIdLimiter.tryAcquire(clientIp(exchange))) {
+                tooManyRequests(exchange, "아이디 찾기 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
+            String id = userService.findId(phoneParam(readForm(exchange)));
             sendJson(exchange, 200, "{\"ok\":true,\"id\":\"" + json(id) + "\"}");
         } catch (Exception e) {
             sendError(exchange, 404, message(e));
@@ -363,7 +408,12 @@ public class LocalWebApplication {
         try {
             Map<String, String> form = readForm(exchange);
             String id = form.getOrDefault("id", "").trim();
-            String phone = form.getOrDefault("phone", "").trim();
+            String phone = phoneParam(form);
+            // 같은 계정에 대한 재설정 시도를 제한 (전화번호 대입으로 남의 계정을 바꾸는 것 방지)
+            if (!resetLimiter.tryAcquire(id.toLowerCase())) {
+                tooManyRequests(exchange, "비밀번호 재설정 시도가 너무 많습니다. 1시간 후 다시 시도해주세요.");
+                return;
+            }
             String newPassword = form.get("newPassword");
             String confirmation = form.get("confirmation");
             if (newPassword == null || newPassword.isBlank() || !newPassword.equals(confirmation)) {
@@ -437,6 +487,8 @@ public class LocalWebApplication {
             if (itemName.isBlank() || smallCategoryCode.isBlank())
                 throw new IllegalArgumentException("물품명과 소분류를 선택해주세요.");
             String userId = Session.getInstance().getLoginUser().getId();
+            if (countMyItems(userId) >= MAX_ITEMS_PER_USER)
+                throw new IllegalArgumentException("물품은 1명당 " + MAX_ITEMS_PER_USER + "개까지 등록할 수 있습니다.");
             int itemNum = itemService.itemInsert(new ItemCreateRequest(itemName, true, smallCategoryCode, userId));
             sendJson(exchange, 201, "{\"ok\":true,\"itemNum\":" + itemNum
                     + ",\"message\":\"물품이 DB에 등록되었습니다.\"}");
@@ -450,7 +502,7 @@ public class LocalWebApplication {
         if (!loggedIn(exchange)) return;
         try {
             Map<String, String> form = readForm(exchange);
-            int itemNum = Integer.parseInt(form.getOrDefault("itemNum", "0"));
+            int itemNum = intParam(form, "itemNum");
             String itemName = form.getOrDefault("itemName", "").trim();
             String smallCategoryCode = form.getOrDefault("smallCategoryCode", "").trim();
             if (itemNum <= 0 || itemName.isBlank() || smallCategoryCode.isBlank())
@@ -467,7 +519,7 @@ public class LocalWebApplication {
         if (!method(exchange, "POST")) return;
         if (!loggedIn(exchange)) return;
         try {
-            int itemNum = Integer.parseInt(readForm(exchange).getOrDefault("itemNum", "0"));
+            int itemNum = intParam(readForm(exchange), "itemNum");
             String userId = Session.getInstance().getLoginUser().getId();
             itemService.itemDelete(itemNum, userId);
             sendJson(exchange, 200, "{\"ok\":true,\"message\":\"물품이 DB에서 삭제되었습니다.\"}");
@@ -507,7 +559,7 @@ public class LocalWebApplication {
         if (!loggedIn(exchange)) return;
         try {
             Map<String, String> form = readForm(exchange);
-            int postNum = Integer.parseInt(form.getOrDefault("postNum", "0"));
+            int postNum = intParam(form, "postNum");
             String borrowerId = Session.getInstance().getLoginUser().getId();
             rentalService.rentalCreate(new RentalCreateRequest(postNum, borrowerId));
             sendJson(exchange, 201, "{\"ok\":true,\"status\":100,\"message\":\"대여 신청이 DB에 저장되었습니다.\"}");
@@ -550,7 +602,7 @@ public class LocalWebApplication {
         if (!loggedIn(exchange)) return;
         try {
             Map<String, String> form = readForm(exchange);
-            int rentalNum = Integer.parseInt(form.getOrDefault("rentalNum", "0"));
+            int rentalNum = intParam(form, "rentalNum");
             String action = form.getOrDefault("action", "");
             String resultMessage;
             if ("approve".equals(action)) {
@@ -573,6 +625,8 @@ public class LocalWebApplication {
                 rentalService.updateStatusRentalNum(toStatus, rentalNum, fromStatus);
             }
             sendJson(exchange, 200, "{\"ok\":true,\"message\":\"" + json(resultMessage) + "\"}");
+        } catch (NotFoundException e) {
+            sendError(exchange, 400, "처리할 수 있는 대여 건이 아닙니다.");
         } catch (Exception e) {
             sendError(exchange, 400, message(e));
         }
@@ -597,11 +651,15 @@ public class LocalWebApplication {
         String body = new String(raw, StandardCharsets.UTF_8);
         Map<String, String> values = new HashMap<>();
         if (body.isBlank()) return values;
-        for (String pair : body.split("&")) {
-            String[] parts = pair.split("=", 2);
-            String key = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
-            String value = parts.length == 2 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "";
-            values.put(key, value);
+        try {
+            for (String pair : body.split("&")) {
+                String[] parts = pair.split("=", 2);
+                String key = URLDecoder.decode(parts[0], StandardCharsets.UTF_8);
+                String value = parts.length == 2 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "";
+                values.put(key, value);
+            }
+        } catch (IllegalArgumentException badEncoding) {
+            throw new IllegalArgumentException("요청 형식이 올바르지 않습니다.");
         }
         return values;
     }

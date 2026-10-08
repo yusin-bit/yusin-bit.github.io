@@ -15,6 +15,9 @@ services:
     envVars:
       - key: ALLOWED_ORIGINS
         value: https://yusin-bit.github.io
+      # Render 앞단(Cloudflare)이 덮어쓰는 실제 접속자 IP 헤더. 요청 횟수 제한에 사용
+      - key: TRUSTED_IP_HEADER
+        value: CF-Connecting-IP
       - key: DB_URL
         sync: false
       - key: DB_USER
