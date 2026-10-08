@@ -25,7 +25,20 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
+import main.java.com.rental.admin.dto.AdminDtos.AdminAccount;
+import main.java.com.rental.admin.dto.AdminDtos.CategoryRow;
+import main.java.com.rental.admin.dto.AdminDtos.ItemRow;
+import main.java.com.rental.admin.dto.AdminDtos.PostRow;
+import main.java.com.rental.admin.dto.AdminDtos.RentalRow;
+import main.java.com.rental.admin.dto.AdminDtos.Summary;
+import main.java.com.rental.admin.dto.AdminDtos.UserRow;
+import main.java.com.rental.admin.service.AdminService;
+import main.java.com.rental.admin.service.AdminServiceImpl;
 import main.java.com.rental.common.exception.NotFoundException;
+import main.java.com.rental.post.dto.PostCreate;
+import main.java.com.rental.post.dto.PostUpdate;
+import main.java.com.rental.post.entity.Post;
+import main.java.com.rental.rental.enums.RentalStatus;
 import main.java.com.rental.common.util.DBManager;
 import main.java.com.rental.category.entity.Category;
 import main.java.com.rental.category.service.CategoryServiceImpl;
@@ -67,7 +80,7 @@ public class LocalWebApplication {
     private static final long MINUTE = 60 * 1000L;
     // 로그인·회원가입처럼 공격 대상이 되기 쉬운 API
     private static final List<String> AUTH_PATHS = List.of("/api/login", "/api/signup", "/api/check-id",
-            "/api/find-id", "/api/password", "/api/password/reset");
+            "/api/find-id", "/api/password", "/api/password/reset", "/api/admin/login");
 
     // 로그인 토큰 → 사용자. 접속한 사람마다 자기 토큰으로 따로 로그인 상태를 가진다.
     private record WebSession(UserResponse user, long createdAt, long lastSeen) { }
@@ -86,6 +99,11 @@ public class LocalWebApplication {
     private static final int MAX_ITEMS_PER_USER = 30;
     // 한 계정이 동시에 유지할 수 있는 로그인 세션 수
     private static final int MAX_SESSIONS_PER_USER = 5;
+
+    // 관리자 로그인 토큰 (일반 회원 토큰과 따로 관리 → 회원 토큰으로 관리자 API 를 쓸 수 없음)
+    private record AdminSession(AdminAccount admin, long createdAt, long lastSeen) { }
+    private final Map<String, AdminSession> adminSessions = new ConcurrentHashMap<>();
+    private final AdminService adminService = AdminServiceImpl.getInstance();
 
     private final UserServiceImpl userService = new UserServiceImpl();
     private final CategoryServiceImpl categoryService = new CategoryServiceImpl();
@@ -124,6 +142,55 @@ public class LocalWebApplication {
         api(server, "/api/rentals/current", this::currentRentals);
         api(server, "/api/rentals/action", this::rentalAction);
         api(server, "/api/rentals", this::createRental);
+        // 게시글(대여 글) 관리: 콘솔 PostMenuView 와 같은 기능
+        api(server, "/api/posts/mine", this::myPosts);
+        api(server, "/api/posts/create", this::createPost);
+        api(server, "/api/posts/update", this::updatePost);
+        api(server, "/api/posts/delete", this::deletePost);
+        api(server, "/api/posts/search", this::searchPosts);
+        // 관리자
+        api(server, "/api/admin/login", this::adminLogin);
+        api(server, "/api/admin/logout", this::adminLogout);
+        api(server, "/api/admin/summary", this::adminSummary);
+        api(server, "/api/admin/users", this::adminUsers);
+        api(server, "/api/admin/users/reset-password", this::adminResetPassword);
+        api(server, "/api/admin/posts", this::adminPosts);
+        api(server, "/api/admin/posts/delete", this::adminDeletePost);
+        api(server, "/api/admin/rentals", this::adminRentals);
+        api(server, "/api/admin/rentals/reject", this::adminRejectRental);
+        api(server, "/api/admin/users/logout", ex -> adminAction(ex, form -> {
+            String userId = form.getOrDefault("userId", "").trim();
+            endSessionsOf(userId, null);
+            return userId + " 회원의 로그인을 모두 끊었습니다.";
+        }));
+        api(server, "/api/admin/users/unlock", ex -> adminAction(ex, form -> {
+            String userId = form.getOrDefault("userId", "").trim();
+            loginFailures.reset(userId.toLowerCase());
+            resetLimiter.reset(userId.toLowerCase());
+            return userId + " 회원의 로그인 잠금을 해제했습니다.";
+        }));
+        api(server, "/api/admin/items", this::adminItems);
+        api(server, "/api/admin/items/delete", ex -> adminAction(ex, form -> {
+            adminService.deleteItem(intParam(form, "itemNum"));
+            return "물품을 삭제했습니다.";
+        }));
+        api(server, "/api/admin/items/restore", ex -> adminAction(ex, form -> {
+            adminService.restoreItem(intParam(form, "itemNum"));
+            return "물품을 대여 가능 상태로 되돌렸습니다.";
+        }));
+        api(server, "/api/admin/categories", this::adminCategories);
+        api(server, "/api/admin/categories/big/create", ex -> adminAction(ex, form ->
+                "대분류 " + adminService.addBigCategory(form.get("name")) + " 을(를) 추가했습니다."));
+        api(server, "/api/admin/categories/small/create", ex -> adminAction(ex, form ->
+                "소분류 " + adminService.addSmallCategory(form.get("bigCode"), form.get("name")) + " 을(를) 추가했습니다."));
+        api(server, "/api/admin/categories/small/delete", ex -> adminAction(ex, form -> {
+            adminService.deleteSmallCategory(form.getOrDefault("code", "").trim());
+            return "소분류를 삭제했습니다.";
+        }));
+        api(server, "/api/admin/categories/big/delete", ex -> adminAction(ex, form -> {
+            adminService.deleteBigCategory(form.getOrDefault("code", "").trim());
+            return "대분류를 삭제했습니다.";
+        }));
         server.createContext("/", new StaticHandler());
         server.setExecutor(Executors.newFixedThreadPool(8));
         server.start();
@@ -627,6 +694,428 @@ public class LocalWebApplication {
             sendJson(exchange, 200, "{\"ok\":true,\"message\":\"" + json(resultMessage) + "\"}");
         } catch (NotFoundException e) {
             sendError(exchange, 400, "처리할 수 있는 대여 건이 아닙니다.");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    // ===================== 게시글(대여 글) =====================
+
+    private static final java.time.format.DateTimeFormatter DB_DATE_TIME =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** 콘솔 PostMenuView.validPostInput 과 같은 규칙. 통과하면 [대여일, 반납일] 을 DB 형식으로 돌려준다 */
+    private static String[] validPostInput(String title, String content, String rentDate, String returnDate, String addr) {
+        if (title == null || title.isBlank() || title.length() > 50 || content == null || content.isBlank()
+                || addr == null || addr.isBlank() || addr.length() > 255)
+            throw new IllegalArgumentException("제목(1~50자), 설명, 주소(1~255자)를 올바르게 입력해주세요.");
+        try {
+            java.time.LocalDateTime start = java.time.LocalDateTime.parse(rentDate.trim().replace(' ', 'T'));
+            java.time.LocalDateTime end = java.time.LocalDateTime.parse(returnDate.trim().replace(' ', 'T'));
+            if (!end.isAfter(start)) throw new IllegalArgumentException("반납일은 대여일보다 늦어야 합니다.");
+            return new String[] { start.format(DB_DATE_TIME), end.format(DB_DATE_TIME) };
+        } catch (java.time.format.DateTimeParseException | NullPointerException e) {
+            throw new IllegalArgumentException("대여일과 반납일을 올바르게 입력해주세요.");
+        }
+    }
+
+    private static String postJson(Post post) {
+        return "{\"postNum\":" + post.getPostNum() + ",\"itemNum\":" + post.getItemNum()
+                + ",\"title\":\"" + json(post.getTitle()) + "\",\"content\":\"" + json(post.getContent())
+                + "\",\"rentDate\":\"" + json(post.getRentDate()) + "\",\"returnDate\":\"" + json(post.getReturnDate())
+                + "\",\"addr\":\"" + json(post.getAddr()) + "\"}";
+    }
+
+    /** 내 게시글 목록 (콘솔: 등록 게시글 조회) */
+    private void myPosts(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            List<Post> posts;
+            try {
+                posts = postService.selectById();
+            } catch (NotFoundException empty) {
+                posts = List.of();
+            }
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"posts\":[");
+            for (int i = 0; i < posts.size(); i++) body.append(i > 0 ? "," : "").append(postJson(posts.get(i)));
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    /** 게시글 등록 (콘솔: 새 게시글 등록 / 물품 등록 후 게시글 등록) */
+    private void createPost(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            Map<String, String> form = readForm(exchange);
+            int itemNum = intParam(form, "itemNum");
+            String title = form.getOrDefault("title", "").trim();
+            String content = form.getOrDefault("content", "").trim();
+            String addr = form.getOrDefault("addr", "").trim();
+            String[] dates = validPostInput(title, content, form.get("rentDate"), form.get("returnDate"), addr);
+            PostCreate post = new PostCreate();
+            post.setItemNum(itemNum);
+            post.setTitle(title);
+            post.setContent(content);
+            post.setRentDate(dates[0]);
+            post.setReturnDate(dates[1]);
+            post.setAddr(addr);
+            postService.postCreate(post);
+            sendJson(exchange, 201, "{\"ok\":true,\"message\":\"대여 글이 등록되었습니다.\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    /** 게시글 수정 (콘솔: 등록 게시글 정보 수정) — 본인 물품의 글만 수정됨 */
+    private void updatePost(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            Map<String, String> form = readForm(exchange);
+            int postNum = intParam(form, "postNum");
+            String title = form.getOrDefault("title", "").trim();
+            String content = form.getOrDefault("content", "").trim();
+            String addr = form.getOrDefault("addr", "").trim();
+            String[] dates = validPostInput(title, content, form.get("rentDate"), form.get("returnDate"), addr);
+            PostUpdate post = new PostUpdate();
+            post.setPostNum(postNum);
+            post.setTitle(title);
+            post.setContent(content);
+            post.setRentDate(dates[0]);
+            post.setReturnDate(dates[1]);
+            post.setAddr(addr);
+            postService.postUpdate(post);
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"대여 글이 수정되었습니다.\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    /** 게시글 삭제 (콘솔: 등록 게시글 삭제) — 본인 물품의 글만, 대여 내역이 있으면 삭제 불가 */
+    private void deletePost(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            postService.postDelete(intParam(readForm(exchange), "postNum"));
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"대여 글이 삭제되었습니다.\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    /**
+     * 게시글 검색 (콘솔: 게시글 검색 — 물품 번호/제목/내용/대여일/주소)
+     * 대여 화면에서 쓰므로 지금 빌릴 수 있는 글만 돌려준다.
+     */
+    private void searchPosts(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            Map<String, String> query = queryParams(exchange);
+            String type = query.getOrDefault("type", "");
+            String keyword = query.getOrDefault("q", "").trim();
+            if (keyword.isEmpty() || keyword.length() > 100) throw new IllegalArgumentException("검색어를 1~100자로 입력해주세요.");
+            List<Post> found;
+            try {
+                found = switch (type) {
+                    case "title" -> postService.selectByTitleKeyword(keyword);
+                    case "content" -> postService.selectByContentKeyword(keyword);
+                    case "addr" -> postService.selectByAddr(keyword);
+                    case "rentDate" -> postService.selectByRentDate(java.time.LocalDate.parse(keyword).toString());
+                    case "itemNum" -> {
+                        Post post = postService.selectByItemNum(Integer.parseInt(keyword));
+                        yield post == null ? List.of() : List.of(post);
+                    }
+                    default -> throw new IllegalArgumentException("검색 조건을 선택해주세요.");
+                };
+            } catch (NotFoundException empty) {
+                found = List.of();
+            } catch (java.time.format.DateTimeParseException | NumberFormatException badKeyword) {
+                throw new IllegalArgumentException("대여일은 2026-10-08, 물품 번호는 숫자로 입력해주세요.");
+            }
+            java.util.Set<Integer> matched = new java.util.HashSet<>();
+            for (Post post : found) matched.add(post.getPostNum());
+            List<AvailablePost> available;
+            try {
+                available = postService.selectAvailablePost();
+            } catch (NotFoundException empty) {
+                available = List.of();
+            }
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"posts\":[");
+            boolean first = true;
+            for (AvailablePost post : available) {
+                if (!matched.contains(post.getPostNum())) continue;
+                body.append(first ? "" : ",");
+                first = false;
+                body.append("{\"postNum\":").append(post.getPostNum())
+                    .append(",\"title\":\"").append(json(post.getTitle()))
+                    .append("\",\"content\":\"").append(json(post.getContent()))
+                    .append("\",\"rentDate\":\"").append(json(post.getRentDate()))
+                    .append("\",\"returnDate\":\"").append(json(post.getReturnDate()))
+                    .append("\",\"addr\":\"").append(json(post.getAddr()))
+                    .append("\",\"itemName\":\"").append(json(post.getItemName()))
+                    .append("\",\"category\":\"").append(json(post.getCategory())).append("\"}");
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (IllegalArgumentException e) {
+            sendError(exchange, 400, message(e));
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private static Map<String, String> queryParams(HttpExchange exchange) {
+        Map<String, String> values = new HashMap<>();
+        String raw = exchange.getRequestURI().getRawQuery();
+        if (raw == null || raw.isBlank()) return values;
+        try {
+            for (String pair : raw.split("&")) {
+                String[] parts = pair.split("=", 2);
+                values.put(URLDecoder.decode(parts[0], StandardCharsets.UTF_8),
+                        parts.length == 2 ? URLDecoder.decode(parts[1], StandardCharsets.UTF_8) : "");
+            }
+        } catch (IllegalArgumentException badEncoding) {
+            throw new IllegalArgumentException("요청 형식이 올바르지 않습니다.");
+        }
+        return values;
+    }
+
+    // ===================== 관리자 =====================
+
+    /** 관리자 토큰으로 로그인한 관리자를 찾는다. 없으면 401 응답 후 null */
+    private AdminAccount requireAdmin(HttpExchange exchange) throws IOException {
+        long now = System.currentTimeMillis();
+        adminSessions.values().removeIf(s -> now - s.lastSeen() > SESSION_IDLE_MILLIS || now - s.createdAt() > SESSION_MAX_MILLIS);
+        String token = bearerToken(exchange);
+        AdminSession session = token == null ? null
+                : adminSessions.computeIfPresent(token, (key, s) -> new AdminSession(s.admin(), s.createdAt(), now));
+        if (session != null) return session.admin();
+        sendError(exchange, 401, "관리자 로그인이 필요합니다.");
+        return null;
+    }
+
+    private void adminLogin(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        try {
+            Map<String, String> form = readForm(exchange);
+            String failureKey = "admin:" + form.getOrDefault("id", "").trim().toLowerCase();
+            if (loginFailures.isBlocked(failureKey)) {
+                tooManyRequests(exchange, "로그인 실패가 너무 많습니다. 15분 후 다시 시도해주세요.");
+                return;
+            }
+            AdminAccount admin;
+            try {
+                admin = adminService.login(form.get("id"), form.get("password"));
+            } catch (Exception loginFailed) {
+                loginFailures.tryAcquire(failureKey);
+                throw loginFailed;
+            }
+            loginFailures.reset(failureKey);
+            byte[] bytes = new byte[32];
+            random.nextBytes(bytes);
+            String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+            long now = System.currentTimeMillis();
+            adminSessions.put(token, new AdminSession(admin, now, now));
+            sendJson(exchange, 200, "{\"ok\":true,\"token\":\"" + token + "\",\"admin\":{\"id\":\""
+                    + json(admin.id()) + "\",\"name\":\"" + json(admin.name()) + "\"}}");
+        } catch (Exception e) {
+            sendError(exchange, 401, message(e));
+        }
+    }
+
+    private void adminLogout(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        String token = bearerToken(exchange);
+        if (token != null) adminSessions.remove(token);
+        sendJson(exchange, 200, "{\"ok\":true}");
+    }
+
+    private void adminSummary(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            Summary s = adminService.summary();
+            sendJson(exchange, 200, "{\"ok\":true,\"summary\":{\"users\":" + s.users() + ",\"items\":" + s.items()
+                    + ",\"posts\":" + s.posts() + ",\"rentals\":" + s.rentals() + ",\"requested\":" + s.requested()
+                    + ",\"inProgress\":" + s.inProgress() + ",\"completed\":" + s.completed()
+                    + ",\"rejected\":" + s.rejected() + "}}");
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void adminUsers(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            List<UserRow> users = adminService.users();
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"users\":[");
+            for (int i = 0; i < users.size(); i++) {
+                UserRow u = users.get(i);
+                body.append(i > 0 ? "," : "").append("{\"id\":\"").append(json(u.id()))
+                    .append("\",\"nickname\":\"").append(json(u.nickName()))
+                    .append("\",\"name\":\"").append(json(u.name()))
+                    .append("\",\"phone\":\"").append(json(u.phone()))
+                    .append("\",\"itemCount\":").append(u.itemCount())
+                    .append(",\"rentalCount\":").append(u.rentalCount())
+                    .append(",\"locked\":").append(loginFailures.isBlocked(u.id().toLowerCase()))
+                    .append(",\"sessions\":").append(sessions.values().stream().filter(s -> s.user().getId().equals(u.id())).count())
+                    .append('}');
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    /** 회원 임시 비밀번호 발급: 비밀번호를 잊은 회원을 관리자가 도와줄 때 사용. 그 회원의 로그인은 모두 끊는다 */
+    private void adminResetPassword(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            Map<String, String> form = readForm(exchange);
+            String userId = form.getOrDefault("userId", "").trim();
+            adminService.resetUserPassword(userId, form.get("newPassword"));
+            endSessionsOf(userId, null);
+            loginFailures.reset(userId.toLowerCase());
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"임시 비밀번호를 설정했습니다.\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    private void adminPosts(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            List<PostRow> posts = adminService.posts();
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"posts\":[");
+            for (int i = 0; i < posts.size(); i++) {
+                PostRow p = posts.get(i);
+                body.append(i > 0 ? "," : "").append("{\"postNum\":").append(p.postNum())
+                    .append(",\"title\":\"").append(json(p.title()))
+                    .append("\",\"itemName\":\"").append(json(p.itemName()))
+                    .append("\",\"lenderId\":\"").append(json(p.lenderId()))
+                    .append("\",\"rentDate\":\"").append(json(p.rentDate()))
+                    .append("\",\"returnDate\":\"").append(json(p.returnDate()))
+                    .append("\",\"addr\":\"").append(json(p.addr()))
+                    .append("\",\"available\":").append(p.available())
+                    .append(",\"rentalCount\":").append(p.rentalCount()).append('}');
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void adminDeletePost(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            adminService.deletePost(intParam(readForm(exchange), "postNum"));
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"게시글을 삭제했습니다.\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    private void adminRentals(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            List<RentalRow> rentals = adminService.rentals();
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"rentals\":[");
+            for (int i = 0; i < rentals.size(); i++) {
+                RentalRow r = rentals.get(i);
+                String statusName;
+                try {
+                    statusName = RentalStatus.fromCode(r.status()).getName();
+                } catch (Exception unknown) {
+                    statusName = String.valueOf(r.status());
+                }
+                body.append(i > 0 ? "," : "").append("{\"rentalNum\":").append(r.rentalNum())
+                    .append(",\"postNum\":").append(r.postNum())
+                    .append(",\"itemName\":\"").append(json(r.itemName()))
+                    .append("\",\"lenderId\":\"").append(json(r.lenderId()))
+                    .append("\",\"borrowerId\":\"").append(json(r.borrowerId()))
+                    .append("\",\"status\":").append(r.status())
+                    .append(",\"statusName\":\"").append(json(statusName)).append("\"}");
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    /** 관리자 POST 작업 공통 처리: 관리자 확인 → 작업 실행 → 결과 메시지 응답 */
+    @FunctionalInterface
+    private interface AdminWork {
+        String run(Map<String, String> form) throws Exception;
+    }
+
+    private void adminAction(HttpExchange exchange, AdminWork work) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            String resultMessage = work.run(readForm(exchange));
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"" + json(resultMessage) + "\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    private void adminItems(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            List<ItemRow> items = adminService.items();
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"items\":[");
+            for (int i = 0; i < items.size(); i++) {
+                ItemRow it = items.get(i);
+                body.append(i > 0 ? "," : "").append("{\"itemNum\":").append(it.itemNum())
+                    .append(",\"itemName\":\"").append(json(it.itemName()))
+                    .append("\",\"lenderId\":\"").append(json(it.lenderId()))
+                    .append("\",\"category\":\"").append(json(it.bigCategory() + " · " + it.smallCategory()))
+                    .append("\",\"available\":").append(it.available())
+                    .append(",\"postCount\":").append(it.postCount())
+                    .append(",\"activeRentals\":").append(it.activeRentals()).append('}');
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void adminCategories(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "GET")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            List<CategoryRow> rows = adminService.categories();
+            StringBuilder body = new StringBuilder("{\"ok\":true,\"categories\":[");
+            for (int i = 0; i < rows.size(); i++) {
+                CategoryRow c = rows.get(i);
+                body.append(i > 0 ? "," : "").append("{\"bigCode\":\"").append(json(c.bigCode()))
+                    .append("\",\"bigName\":\"").append(json(c.bigName()))
+                    .append("\",\"smallCode\":").append(c.smallCode() == null ? "null" : "\"" + json(c.smallCode()) + "\"")
+                    .append(",\"smallName\":").append(c.smallName() == null ? "null" : "\"" + json(c.smallName()) + "\"")
+                    .append(",\"itemCount\":").append(c.itemCount()).append('}');
+            }
+            sendJson(exchange, 200, body.append("]}").toString());
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void adminRejectRental(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            adminService.rejectRental(intParam(readForm(exchange), "rentalNum"));
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"대여 신청을 거절 처리했습니다.\"}");
         } catch (Exception e) {
             sendError(exchange, 400, message(e));
         }

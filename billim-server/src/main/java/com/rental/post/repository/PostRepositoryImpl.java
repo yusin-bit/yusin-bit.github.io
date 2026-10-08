@@ -21,23 +21,27 @@ public class PostRepositoryImpl implements PostRepository {
 	public int postCreate(PostCreate postCreate) throws PostException {
 		Connection con = null;
 		PreparedStatement ps = null;
-		String sql = "INSERT INTO Post" + "(ItemNum, Title, Content," + "RentDate, ReturnDate, Addr)"
-				+ "VALUES (?, ?, ?, ?, ?, ?)";
+		// 로그인한 사용자의 물품일 때만 게시글을 만든다 (다른 사람 물품에 글을 다는 것 방지)
+		String sql = "INSERT INTO Post (ItemNum, Title, Content, RentDate, ReturnDate, Addr) "
+				+ "SELECT i.ItemNum, ?, ?, ?, ?, ? FROM Item i WHERE i.ItemNum = ? AND i.LenderID = ?";
 		int result = 0;
 		try {
 			con = DBManager.getConnection();
 			ps = con.prepareStatement(sql);
-			ps.setInt(1, postCreate.getItemNum());
-			ps.setString(2, postCreate.getTitle());
-			ps.setString(3, postCreate.getContent());
-			ps.setString(4, postCreate.getRentDate());
-			ps.setString(5, postCreate.getReturnDate());
-			ps.setString(6, postCreate.getAddr());
+			ps.setString(1, postCreate.getTitle());
+			ps.setString(2, postCreate.getContent());
+			ps.setString(3, postCreate.getRentDate());
+			ps.setString(4, postCreate.getReturnDate());
+			ps.setString(5, postCreate.getAddr());
+			ps.setInt(6, postCreate.getItemNum());
+			ps.setString(7, Session.getInstance().getLoginUser().getId());
 
 			result = ps.executeUpdate();
 
 		} catch (SQLException e) {
 			// e.printStackTrace();
+			if ("23000".equals(e.getSQLState()))
+				throw new PostException("이미 대여 글이 등록된 물품입니다.");
 			throw new PostException();
 		} finally {
 			DBManager.close(con, ps);
