@@ -26,6 +26,7 @@ public class RentalServiceImpl implements RentalService {
 
 	@Override
 	public void rentalCreate(RentalCreateRequest rentalCreateRequest) throws RentalException {
+		// 실패하면 저장소가 이유(본인 물품/이미 신청/대여 중 등)를 담은 예외를 던진다
 		int re = rr.rentalCreate(rentalCreateRequest);
 		if (re == 0)
 			throw new RentalException("생성에 실패했습니다.");
@@ -88,6 +89,8 @@ public class RentalServiceImpl implements RentalService {
 			con = DBManager.getConnection();
 			// 트랜잭션 시작
 			con.setAutoCommit(false);
+			// 0. 같은 게시글에 대한 승인·신청이 동시에 처리되지 않도록 게시글 행을 먼저 잠근다
+			rr.lockPost(con, postNum);
 			// 1. 다른 대여 요청 거절
 			if (!rr.rejectOtherRentals(con, postNum, rentalNum)) {
 				con.rollback();

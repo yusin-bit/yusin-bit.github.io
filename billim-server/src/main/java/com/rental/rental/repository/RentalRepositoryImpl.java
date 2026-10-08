@@ -38,18 +38,64 @@ public class RentalRepositoryImpl implements RentalRepository {
 				        AND r.Status IN (100, 101, 110, 200, 201, 210)
 				  )
 				""";
-		try (Connection conn = DBManager.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
-
-			ps.setString(1, rentalCreateRequest.getBorrowerId());
-			ps.setInt(2, rentalCreateRequest.getPostNum());
-			ps.setString(3, rentalCreateRequest.getBorrowerId());
-			ps.setString(4, rentalCreateRequest.getBorrowerId());
-
-			return ps.executeUpdate();
-
+		try (Connection conn = DBManager.getConnection()) {
+			// 같은 게시글에 대한 신청을 한 번에 하나씩 처리 (동시에 같은 신청이 두 번 들어와도 1건만 생기도록)
+			conn.setAutoCommit(false);
+			try {
+				lockPost(conn, rentalCreateRequest.getPostNum());
+				int result;
+				try (PreparedStatement ps = conn.prepareStatement(sql)) {
+					ps.setString(1, rentalCreateRequest.getBorrowerId());
+					ps.setInt(2, rentalCreateRequest.getPostNum());
+					ps.setString(3, rentalCreateRequest.getBorrowerId());
+					ps.setString(4, rentalCreateRequest.getBorrowerId());
+					result = ps.executeUpdate();
+				}
+				if (result == 0) {
+					String reason = rentalCreateFailReason(conn, rentalCreateRequest);
+					conn.rollback();
+					throw new RentalException(reason);
+				}
+				conn.commit();
+				return result;
+			} catch (SQLException e) {
+				conn.rollback();
+				throw e;
+			}
 		} catch (SQLException e) {
 			// e.printStackTrace();
 			throw new RentalException();
+		}
+	}
+
+	/** 게시글 행을 잠가서 같은 게시글에 대한 신청·승인이 동시에 처리되지 않게 한다 (트랜잭션 안에서 호출) */
+	@Override
+	public void lockPost(Connection con, int postNum) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement("SELECT PostNum FROM Post WHERE PostNum = ? FOR UPDATE")) {
+			ps.setInt(1, postNum);
+			ps.executeQuery().close();
+		}
+	}
+
+	/** 대여 신청이 만들어지지 않은 이유를 사용자에게 알려줄 문구로 바꾼다 */
+	private String rentalCreateFailReason(Connection con, RentalCreateRequest request) throws SQLException {
+		String sql = """
+				SELECT i.LenderID, i.Status,
+				       EXISTS (SELECT 1 FROM Rental r WHERE r.BorrowerId = ? AND r.PostNum = p.PostNum
+				               AND r.Status IN (100, 101, 110, 200, 201, 210)) AS alreadyRequested
+				FROM Post p JOIN Item i ON i.ItemNum = p.ItemNum
+				WHERE p.PostNum = ?
+				""";
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			ps.setString(1, request.getBorrowerId());
+			ps.setInt(2, request.getPostNum());
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) return "존재하지 않는 게시글입니다.";
+				if (request.getBorrowerId().equals(rs.getString("LenderID"))) return "본인 물품은 대여 신청할 수 없습니다.";
+				if (rs.getBoolean("alreadyRequested")) return "이미 신청했거나 진행 중인 대여가 있습니다.";
+				if (!rs.getBoolean("Status")) return "지금은 대여 중인 물품입니다.";
+				return "대여 신청을 처리하지 못했습니다.";
+			}
 		}
 	}
 

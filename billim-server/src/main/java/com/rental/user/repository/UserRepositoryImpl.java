@@ -72,8 +72,11 @@ public class UserRepositoryImpl implements UserRepository {
 
 			result = ps.executeUpdate();
 		} catch (SQLException e) {
-			if ("23000".equals(e.getSQLState()))
-				throw new UserException("이미 사용 중인 아이디입니다.");
+			if ("23000".equals(e.getSQLState())) {
+				// 아이디는 서비스에서 먼저 확인하므로, 여기서 나는 중복은 대부분 전화번호(UQ_User_Phone)
+				String detail = String.valueOf(e.getMessage());
+				throw new UserException(detail.contains("Phone") ? "이미 가입된 전화번호입니다." : "이미 사용 중인 아이디입니다.");
+			}
 			throw new UserException();
 		} finally {
 			DBManager.close(con, ps);

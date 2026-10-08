@@ -223,8 +223,22 @@ public class LocalWebApplication {
                 handler.handle(exchange);
             } finally {
                 Session.endRequest();
+                auditAdmin(exchange, path, ip);
             }
         });
+    }
+
+    /**
+     * 관리자 감사 로그: 관리자 API 의 변경 요청(POST)마다 누가·무엇을·결과를 서버 로그에 남긴다.
+     * (요청 본문은 남기지 않음 → 임시 비밀번호 같은 값이 로그에 들어가지 않음)
+     */
+    private void auditAdmin(HttpExchange exchange, String path, String ip) {
+        if (!path.startsWith("/api/admin/") || !"POST".equalsIgnoreCase(exchange.getRequestMethod())) return;
+        String token = bearerToken(exchange);
+        AdminSession session = token == null ? null : adminSessions.get(token);
+        String who = session != null ? session.admin().id() : "-";
+        System.out.println("[admin-audit] " + java.time.Instant.now() + " admin=" + who + " ip=" + ip
+                + " " + path + " status=" + exchange.getResponseCode());
     }
 
     private void addCorsHeaders(HttpExchange exchange) {
@@ -553,6 +567,7 @@ public class LocalWebApplication {
             String smallCategoryCode = form.getOrDefault("smallCategoryCode", "").trim();
             if (itemName.isBlank() || smallCategoryCode.isBlank())
                 throw new IllegalArgumentException("물품명과 소분류를 선택해주세요.");
+            if (itemName.length() > 50) throw new IllegalArgumentException("물품명은 50자 이내로 입력해주세요.");
             String userId = Session.getInstance().getLoginUser().getId();
             if (countMyItems(userId) >= MAX_ITEMS_PER_USER)
                 throw new IllegalArgumentException("물품은 1명당 " + MAX_ITEMS_PER_USER + "개까지 등록할 수 있습니다.");
@@ -574,6 +589,7 @@ public class LocalWebApplication {
             String smallCategoryCode = form.getOrDefault("smallCategoryCode", "").trim();
             if (itemNum <= 0 || itemName.isBlank() || smallCategoryCode.isBlank())
                 throw new IllegalArgumentException("수정할 물품 정보를 확인해주세요.");
+            if (itemName.length() > 50) throw new IllegalArgumentException("물품명은 50자 이내로 입력해주세요.");
             String userId = Session.getInstance().getLoginUser().getId();
             itemService.itemUpdate(new Item(itemNum, itemName, smallCategoryCode, userId));
             sendJson(exchange, 200, "{\"ok\":true,\"message\":\"물품 정보가 수정되었습니다.\"}");

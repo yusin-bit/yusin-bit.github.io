@@ -40,6 +40,9 @@ public interface RentalRepository {
 	 */
 	boolean approveRental(Connection con, int rentalNum) throws RentalException;
 
+	/** 트랜잭션 안에서 게시글 행을 잠근다 (SELECT ... FOR UPDATE) */
+	void lockPost(Connection con, int postNum) throws java.sql.SQLException;
+
 //	같은 게시글의 다른 대여 요청 거절
 	boolean rejectOtherRentals(Connection con, int postNum, int rentalNum) throws RentalException;
 
