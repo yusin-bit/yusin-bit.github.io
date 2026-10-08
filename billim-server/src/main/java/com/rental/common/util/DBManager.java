@@ -37,7 +37,8 @@ public class DBManager {
 
 	private static void overrideFromEnv(String key, String envName) {
 		String value = System.getenv(envName);
-		if (value != null && !value.isBlank()) proFile.setProperty(key, value);
+		// 대시보드에 복사·붙여넣기 하다 들어간 앞뒤 공백·줄바꿈은 지운다 (" avnadmin" 같은 값으로 인증 실패 방지)
+		if (value != null && !value.isBlank()) proFile.setProperty(key, value.strip());
 	}
 
 	
