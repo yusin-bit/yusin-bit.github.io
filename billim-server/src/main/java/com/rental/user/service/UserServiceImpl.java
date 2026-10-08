@@ -71,8 +71,8 @@ public class UserServiceImpl implements UserService {
 	@Override
 	public int updatePassword(PasswordChangeRequest request) throws UserException {
 		if (request == null || blank(request.getId()) || blank(request.getPhoneNo())
-				|| blank(request.getNewPassword()) || request.getNewPassword().length() > 20)
-			throw new PasswordUpdateException("아이디, 전화번호와 새 비밀번호를 확인해주세요.");
+				|| !validPasswordLength(request.getNewPassword()))
+			throw new PasswordUpdateException("아이디, 전화번호와 새 비밀번호(4~20자)를 확인해주세요.");
 		int result = userRepository.updatePassword(request);
 
 		if (result == 0) {
@@ -89,11 +89,16 @@ public class UserServiceImpl implements UserService {
 
 	private void validateSignUp(UserSignUpRequest request) {
 		if (request == null || blank(request.getId()) || request.getId().length() > 20
-				|| blank(request.getPassword()) || request.getPassword().length() > 20
+				|| !validPasswordLength(request.getPassword())
 				|| blank(request.getNickName()) || request.getNickName().length() > 10
 				|| blank(request.getName()) || request.getName().length() > 10
 				|| blank(request.getPhoneNo()))
-			throw new UserException("회원정보 형식을 확인해주세요. ID/PW는 20자, 이름/닉네임은 10자 이내입니다.");
+			throw new UserException("회원정보 형식을 확인해주세요. ID는 20자, PW는 4~20자, 이름/닉네임은 10자 이내입니다.");
+	}
+
+	// 비밀번호는 4~20자 (회원가입 화면 안내 "4자 이상 입력"과 같은 기준)
+	private boolean validPasswordLength(String password) {
+		return !blank(password) && password.length() >= 4 && password.length() <= 20;
 	}
 
 	private boolean blank(String value) {

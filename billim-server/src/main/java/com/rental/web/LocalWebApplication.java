@@ -60,11 +60,22 @@ public class LocalWebApplication {
     private static final List<String> ALLOWED_ORIGINS = List.of(env("ALLOWED_ORIGINS", "").split("\\s*,\\s*"));
     private static final Path WEB_ROOT = Path.of("web").toAbsolutePath().normalize();
     private static final long SESSION_IDLE_MILLIS = 2 * 60 * 60 * 1000L;
+    private static final long SESSION_MAX_MILLIS = 12 * 60 * 60 * 1000L;
+    private static final int MAX_BODY_BYTES = 16 * 1024;
+    private static final long MINUTE = 60 * 1000L;
+    // 로그인·회원가입처럼 공격 대상이 되기 쉬운 API
+    private static final List<String> AUTH_PATHS = List.of("/api/login", "/api/signup", "/api/check-id",
+            "/api/find-id", "/api/password", "/api/password/reset");
 
     // 로그인 토큰 → 사용자. 접속한 사람마다 자기 토큰으로 따로 로그인 상태를 가진다.
-    private record WebSession(UserResponse user, long lastSeen) { }
+    private record WebSession(UserResponse user, long createdAt, long lastSeen) { }
     private final Map<String, WebSession> sessions = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
+
+    // 요청 횟수 제한: IP 당 전체 API 분당 300회, 인증 API 분당 30회 / 아이디 당 로그인 실패 15분에 5회
+    private final RequestLimiter apiLimiter = new RequestLimiter(300, MINUTE);
+    private final RequestLimiter authLimiter = new RequestLimiter(30, MINUTE);
+    private final RequestLimiter loginFailures = new RequestLimiter(5, 15 * MINUTE);
 
     private final UserServiceImpl userService = new UserServiceImpl();
     private final CategoryServiceImpl categoryService = new CategoryServiceImpl();
@@ -123,6 +134,13 @@ public class LocalWebApplication {
                 exchange.close();
                 return;
             }
+            String ip = clientIp(exchange);
+            boolean allowed = apiLimiter.tryAcquire(ip)
+                    && (!AUTH_PATHS.contains(exchange.getRequestURI().getPath()) || authLimiter.tryAcquire(ip));
+            if (!allowed) {
+                tooManyRequests(exchange, "요청이 너무 많습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
             Session.beginRequest(currentSessionUser(exchange));
             try {
                 handler.handle(exchange);
@@ -151,10 +169,10 @@ public class LocalWebApplication {
 
     private UserResponse currentSessionUser(HttpExchange exchange) {
         long now = System.currentTimeMillis();
-        sessions.values().removeIf(s -> now - s.lastSeen() > SESSION_IDLE_MILLIS);
+        sessions.values().removeIf(s -> now - s.lastSeen() > SESSION_IDLE_MILLIS || now - s.createdAt() > SESSION_MAX_MILLIS);
         String token = bearerToken(exchange);
         if (token == null) return null;
-        WebSession session = sessions.computeIfPresent(token, (key, s) -> new WebSession(s.user(), now));
+        WebSession session = sessions.computeIfPresent(token, (key, s) -> new WebSession(s.user(), s.createdAt(), now));
         return session == null ? null : session.user();
     }
 
@@ -162,8 +180,37 @@ public class LocalWebApplication {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        sessions.put(token, new WebSession(user, System.currentTimeMillis()));
+        long now = System.currentTimeMillis();
+        sessions.put(token, new WebSession(user, now, now));
         return token;
+    }
+
+    /** 비밀번호가 바뀐 사용자의 로그인 세션을 끊는다 (keepToken 은 유지) */
+    private void endSessionsOf(String userId, String keepToken) {
+        sessions.entrySet().removeIf(e -> e.getValue().user().getId().equals(userId) && !e.getKey().equals(keepToken));
+    }
+
+    /**
+     * 요청한 클라이언트 IP. Render 처럼 프록시 뒤에서 실행될 때는 프록시가 붙여주는 헤더를 사용한다.
+     * (X-Forwarded-For 는 클라이언트가 앞부분을 꾸밀 수 있으므로 프록시가 마지막에 붙인 값을 사용)
+     */
+    private static String clientIp(HttpExchange exchange) {
+        var headers = exchange.getRequestHeaders();
+        for (String name : List.of("CF-Connecting-IP", "True-Client-IP")) {
+            String value = headers.getFirst(name);
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        String forwarded = headers.getFirst("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            String[] parts = forwarded.split(",");
+            return parts[parts.length - 1].trim();
+        }
+        return exchange.getRemoteAddress().getAddress().getHostAddress();
+    }
+
+    private static void tooManyRequests(HttpExchange exchange, String message) throws IOException {
+        exchange.getResponseHeaders().set("Retry-After", "60");
+        sendError(exchange, 429, message);
     }
 
     private static String env(String name, String defaultValue) {
@@ -189,7 +236,9 @@ public class LocalWebApplication {
                 exchange.close();
                 return;
             }
-            sendError(exchange, 500, "DB 연결 실패: " + message(e));
+            // 접속 주소 같은 내부 정보가 노출되지 않도록 상세 내용은 서버 로그에만 남긴다.
+            System.err.println("[health] DB 연결 실패: " + message(e));
+            sendError(exchange, 500, "DB 연결 실패");
         }
     }
 
@@ -200,7 +249,7 @@ public class LocalWebApplication {
             sendJson(exchange, 200, "{\"ok\":true,\"available\":" + stats[0]
                     + ",\"active\":" + stats[1] + ",\"completed\":" + stats[2] + "}");
         } catch (Exception e) {
-            sendError(exchange, 500, message(e));
+            serverError(exchange, e);
         }
     }
 
@@ -208,7 +257,20 @@ public class LocalWebApplication {
         if (!method(exchange, "POST")) return;
         try {
             Map<String, String> form = readForm(exchange);
-            UserResponse user = userService.login(new UserLoginRequest(form.get("id"), form.get("password")));
+            // 같은 아이디로 로그인 실패가 반복되면 일정 시간 잠근다 (비밀번호 무작위 대입 방지)
+            String failureKey = form.getOrDefault("id", "").trim().toLowerCase();
+            if (loginFailures.isBlocked(failureKey)) {
+                tooManyRequests(exchange, "로그인 실패가 너무 많습니다. 15분 후 다시 시도해주세요.");
+                return;
+            }
+            UserResponse user;
+            try {
+                user = userService.login(new UserLoginRequest(form.get("id"), form.get("password")));
+            } catch (Exception loginFailed) {
+                loginFailures.tryAcquire(failureKey);
+                throw loginFailed;
+            }
+            loginFailures.reset(failureKey);
             String token = newSession(user);
             sendJson(exchange, 200, "{\"ok\":true,\"token\":\"" + token + "\",\"user\":{\"id\":\"" + json(user.getId()) +
                     "\",\"nickname\":\"" + json(user.getNickName()) + "\",\"name\":\"" +
@@ -275,9 +337,21 @@ public class LocalWebApplication {
             }
 
             UserResponse currentUser = Session.getInstance().getLoginUser();
-            userService.login(new UserLoginRequest(currentUser.getId(), currentPassword));
+            String failureKey = currentUser.getId().toLowerCase();
+            if (loginFailures.isBlocked(failureKey)) {
+                tooManyRequests(exchange, "비밀번호 확인 실패가 너무 많습니다. 15분 후 다시 시도해주세요.");
+                return;
+            }
+            try {
+                userService.login(new UserLoginRequest(currentUser.getId(), currentPassword));
+            } catch (Exception wrongPassword) {
+                loginFailures.tryAcquire(failureKey);
+                throw wrongPassword;
+            }
             userService.updatePassword(new PasswordChangeRequest(
                     currentUser.getId(), currentUser.getPhoneNo(), newPassword));
+            // 다른 기기에 남아 있는 로그인은 끊고, 지금 쓰는 세션만 유지
+            endSessionsOf(currentUser.getId(), bearerToken(exchange));
             sendJson(exchange, 200, "{\"ok\":true,\"message\":\"비밀번호가 변경되었습니다.\"}");
         } catch (Exception e) {
             sendError(exchange, 400, message(e));
@@ -297,6 +371,8 @@ public class LocalWebApplication {
                 return;
             }
             userService.updatePassword(new PasswordChangeRequest(id, phone, newPassword));
+            // 비밀번호를 재설정하면 그 계정의 기존 로그인은 모두 끊는다
+            endSessionsOf(id, null);
             sendJson(exchange, 200, "{\"ok\":true,\"message\":\"비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요.\"}");
         } catch (Exception e) {
             sendError(exchange, 400, message(e));
@@ -325,7 +401,7 @@ public class LocalWebApplication {
         } catch (NotFoundException empty) {
             sendJson(exchange, 200, "{\"ok\":true,\"posts\":[]}");
         } catch (Exception e) {
-            sendError(exchange, 500, message(e));
+            serverError(exchange, e);
         }
     }
 
@@ -347,7 +423,7 @@ public class LocalWebApplication {
             }
             sendJson(exchange, 200, json.append("]}").toString());
         } catch (Exception e) {
-            sendError(exchange, 500, message(e));
+            serverError(exchange, e);
         }
     }
 
@@ -422,7 +498,7 @@ public class LocalWebApplication {
             }
             sendJson(exchange, 200, json.append("]}").toString());
         } catch (Exception e) {
-            sendError(exchange, 500, message(e));
+            serverError(exchange, e);
         }
     }
 
@@ -465,7 +541,7 @@ public class LocalWebApplication {
             }
             sendJson(exchange, 200, json.append("]}").toString());
         } catch (Exception e) {
-            sendError(exchange, 500, message(e));
+            serverError(exchange, e);
         }
     }
 
@@ -515,7 +591,10 @@ public class LocalWebApplication {
     }
 
     private Map<String, String> readForm(HttpExchange exchange) throws IOException {
-        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        // 아주 큰 요청으로 메모리를 다 쓰지 않도록 본문 크기를 제한한다.
+        byte[] raw = exchange.getRequestBody().readNBytes(MAX_BODY_BYTES + 1);
+        if (raw.length > MAX_BODY_BYTES) throw new IllegalArgumentException("요청 내용이 너무 큽니다.");
+        String body = new String(raw, StandardCharsets.UTF_8);
         Map<String, String> values = new HashMap<>();
         if (body.isBlank()) return values;
         for (String pair : body.split("&")) {
@@ -531,18 +610,47 @@ public class LocalWebApplication {
         sendJson(exchange, status, "{\"ok\":false,\"message\":\"" + json(message) + "\"}");
     }
 
+    /** 예상하지 못한 서버 오류: 내부 메시지(SQL·접속 정보 등)는 로그에만 남기고 사용자에게는 일반 문구를 보낸다. */
+    private static void serverError(HttpExchange exchange, Exception e) throws IOException {
+        System.err.println("[" + exchange.getRequestURI().getPath() + "] " + e.getClass().getName() + ": " + message(e));
+        sendError(exchange, 500, "서버 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
+    }
+
     private static void sendJson(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
+        addSecurityHeaders(exchange);
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream output = exchange.getResponseBody()) { output.write(bytes); }
     }
 
+    private static void addSecurityHeaders(HttpExchange exchange) {
+        var headers = exchange.getResponseHeaders();
+        headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("X-Frame-Options", "DENY");
+        headers.set("Referrer-Policy", "no-referrer");
+    }
+
+    /** JSON 문자열 이스케이프: 따옴표·역슬래시·제어문자, 그리고 HTML 로 해석될 수 있는 < > & 까지 */
     private static String json(String value) {
         if (value == null) return "";
-        return value.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\r", "\\r").replace("\n", "\\n");
+        StringBuilder sb = new StringBuilder(value.length() + 16);
+        for (char c : value.toCharArray()) {
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                case '<', '>', '&' -> sb.append(String.format("\\u%04x", (int) c));
+                default -> {
+                    if (c < 0x20 || c == ' ' || c == ' ') sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private static String message(Exception e) {
@@ -564,10 +672,11 @@ public class LocalWebApplication {
             String requestPath = exchange.getRequestURI().getPath();
             if ("/".equals(requestPath)) requestPath = "/index.html";
             Path file = WEB_ROOT.resolve(requestPath.substring(1)).normalize();
+            boolean head = "HEAD".equalsIgnoreCase(exchange.getRequestMethod());
             if (!file.startsWith(WEB_ROOT) || !Files.isRegularFile(file)) {
                 byte[] missing = "Not found".getBytes(StandardCharsets.UTF_8);
-                exchange.sendResponseHeaders(404, missing.length);
-                exchange.getResponseBody().write(missing);
+                exchange.sendResponseHeaders(404, head ? -1 : missing.length);
+                if (!head) exchange.getResponseBody().write(missing);
                 exchange.close();
                 return;
             }
@@ -577,6 +686,18 @@ public class LocalWebApplication {
                     : "text/html; charset=utf-8";
             exchange.getResponseHeaders().set("Content-Type", type);
             exchange.getResponseHeaders().set("Cache-Control", "no-store");
+            addSecurityHeaders(exchange);
+            if (type.startsWith("text/html")) {
+                // 같은 서버의 스크립트·스타일·API 만 허용, 다른 사이트에 iframe 으로 넣지 못하게
+                exchange.getResponseHeaders().set("Content-Security-Policy",
+                        "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; "
+                                + "form-action 'self'; frame-ancestors 'none'");
+            }
+            if (head) {
+                exchange.sendResponseHeaders(200, -1);
+                exchange.close();
+                return;
+            }
             long length = Files.size(file);
             exchange.sendResponseHeaders(200, length);
             try (InputStream input = Files.newInputStream(file); OutputStream output = exchange.getResponseBody()) {

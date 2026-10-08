@@ -46,10 +46,13 @@ public class DBManager {
 	}
 
 	public static Connection getConnection() throws SQLException {
-		return DriverManager.getConnection(
-				proFile.getProperty("url"),
-				proFile.getProperty("userName"),
-				proFile.getProperty("userPass"));
+		Properties info = new Properties();
+		info.setProperty("user", proFile.getProperty("userName", ""));
+		info.setProperty("password", proFile.getProperty("userPass", ""));
+		// DB 에 닿지 않을 때 무한정 기다리지 않도록 제한 시간(ms)을 둔다. (URL 에 값이 있으면 URL 이 우선)
+		info.setProperty("connectTimeout", "10000");
+		info.setProperty("socketTimeout", "30000");
+		return DriverManager.getConnection(proFile.getProperty("url"), info);
 	}
 	
 
