@@ -274,12 +274,17 @@ public class RentalRepositoryImpl implements RentalRepository {
 	@Override
 	public List<RentalDetail> selectRelatedRentalHistory() throws RentalException {
 		List<RentalDetail> list = new ArrayList<>();
+		// 탈퇴한 상대방은 아이디 대신 "탈퇴회원"으로 보여준다 (본인은 로그인 중이라 탈퇴 상태일 수 없음 → 역할 판별에 영향 없음)
 		String sql = """
-				SELECT r.RentalNum, r.PostNum, r.BorrowerId, r.Status,
-				       i.LenderID, i.ItemName, p.Title, p.RentDate, p.ReturnDate, p.Addr
+				SELECT r.RentalNum, r.PostNum, r.Status,
+				       CASE WHEN b.Withdrawn THEN '탈퇴회원' ELSE r.BorrowerId END AS BorrowerId,
+				       CASE WHEN l.Withdrawn THEN '탈퇴회원' ELSE i.LenderID END AS LenderID,
+				       i.ItemName, p.Title, p.RentDate, p.ReturnDate, p.Addr
 				FROM Rental r
 				JOIN Post p ON p.PostNum = r.PostNum
 				JOIN Item i ON i.ItemNum = p.ItemNum
+				JOIN User b ON b.ID = r.BorrowerId
+				JOIN User l ON l.ID = i.LenderID
 				WHERE r.BorrowerId = ? OR i.LenderID = ?
 				ORDER BY r.RentalNum DESC
 				""";

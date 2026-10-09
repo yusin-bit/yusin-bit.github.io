@@ -5,6 +5,7 @@ import java.util.List;
 import main.java.com.rental.admin.dto.AdminDtos.AdminAccount;
 import main.java.com.rental.admin.dto.AdminDtos.AdminRow;
 import main.java.com.rental.admin.dto.AdminDtos.CategoryRow;
+import main.java.com.rental.admin.dto.AdminDtos.DeleteResult;
 import main.java.com.rental.admin.dto.AdminDtos.ItemRow;
 import main.java.com.rental.admin.dto.AdminDtos.LogRow;
 import main.java.com.rental.admin.dto.AdminDtos.NoticeRow;
@@ -39,7 +40,11 @@ public interface AdminService {
 
 	void updateUser(String userId, String nickName, String name, String phone) throws AdminException;
 
-	void deleteUser(String userId) throws AdminException;
+	/** 탈퇴 처리: 기록은 남기고 개인정보를 가린 뒤 로그인을 막는다 */
+	void withdrawUser(String userId) throws AdminException;
+
+	/** 완전 삭제: confirmId 가 userId 와 같아야 실행. 함께 지워진 건수를 돌려준다 */
+	DeleteResult deleteUser(String userId, String confirmId) throws AdminException;
 
 	// 게시글
 	List<PostRow> posts() throws AdminException;

@@ -1,10 +1,13 @@
 package main.java.com.rental.admin.service;
 
+import java.security.SecureRandom;
+import java.util.HexFormat;
 import java.util.List;
 
 import main.java.com.rental.admin.dto.AdminDtos.AdminAccount;
 import main.java.com.rental.admin.dto.AdminDtos.AdminRow;
 import main.java.com.rental.admin.dto.AdminDtos.CategoryRow;
+import main.java.com.rental.admin.dto.AdminDtos.DeleteResult;
 import main.java.com.rental.admin.dto.AdminDtos.ItemRow;
 import main.java.com.rental.admin.dto.AdminDtos.LogRow;
 import main.java.com.rental.admin.dto.AdminDtos.NoticeRow;
@@ -16,6 +19,7 @@ import main.java.com.rental.admin.dto.AdminDtos.UserRow;
 import main.java.com.rental.admin.repository.AdminRepository;
 import main.java.com.rental.admin.repository.AdminRepositoryImpl;
 import main.java.com.rental.common.exception.AdminException;
+import main.java.com.rental.common.util.PasswordHasher;
 import main.java.com.rental.user.service.UserServiceImpl;
 
 public class AdminServiceImpl implements AdminService {
@@ -52,7 +56,7 @@ public class AdminServiceImpl implements AdminService {
 		if (blank(userId) || newPassword == null || newPassword.length() < 4 || newPassword.length() > 20)
 			throw new AdminException("임시 비밀번호는 4~20자로 입력해주세요.");
 		if (repository.resetUserPassword(userId, newPassword) == 0)
-			throw new AdminException("해당 회원을 찾을 수 없습니다.");
+			throw new AdminException("해당 회원이 없거나 탈퇴 처리된 회원입니다.");
 	}
 
 	@Override
@@ -129,12 +133,12 @@ public class AdminServiceImpl implements AdminService {
 	@Override
 	public void suspendUser(String userId, String reason) throws AdminException {
 		if (blank(reason) || reason.trim().length() > 100) throw new AdminException("정지 사유를 1~100자로 입력해주세요.");
-		if (repository.setUserSuspended(userId, true, reason.trim()) == 0) throw new AdminException("해당 회원을 찾을 수 없습니다.");
+		if (repository.setUserSuspended(userId, true, reason.trim()) == 0) throw new AdminException("해당 회원이 없거나 탈퇴 처리된 회원입니다.");
 	}
 
 	@Override
 	public void unsuspendUser(String userId) throws AdminException {
-		if (repository.setUserSuspended(userId, false, null) == 0) throw new AdminException("해당 회원을 찾을 수 없습니다.");
+		if (repository.setUserSuspended(userId, false, null) == 0) throw new AdminException("해당 회원이 없거나 탈퇴 처리된 회원입니다.");
 	}
 
 	@Override
@@ -144,12 +148,36 @@ public class AdminServiceImpl implements AdminService {
 		String normalized = UserServiceImpl.normalizePhone(phone);
 		if (normalized == null) throw new AdminException("전화번호는 010-1234-5678 형식으로 입력해주세요.");
 		if (repository.updateUser(userId, nickName.trim(), name.trim(), normalized) == 0)
+			throw new AdminException("해당 회원이 없거나 탈퇴 처리된 회원입니다.");
+	}
+
+	private static final SecureRandom RANDOM = new SecureRandom();
+
+	private static String randomHex(int bytes) {
+		byte[] b = new byte[bytes];
+		RANDOM.nextBytes(b);
+		return HexFormat.of().formatHex(b);
+	}
+
+	@Override
+	public void withdrawUser(String userId) throws AdminException {
+		if (blank(userId)) throw new AdminException("회원 아이디가 없습니다.");
+		// 전화번호는 UNIQUE(13자)라 회원마다 다른 자리표시 값을 넣는다. 010-0000-0000 형식이 아니라서 아이디 찾기·재설정에 걸리지 않는다
+		String placeholderPhone = "탈퇴-" + randomHex(5);
+		String randomPassword = PasswordHasher.hash(randomHex(24));
+		if (repository.withdrawUser(userId.trim(), placeholderPhone, randomPassword) == 0)
 			throw new AdminException("해당 회원을 찾을 수 없습니다.");
 	}
 
 	@Override
-	public void deleteUser(String userId) throws AdminException {
-		if (repository.deleteUser(userId) == 0) throw new AdminException("해당 회원을 찾을 수 없습니다.");
+	public DeleteResult deleteUser(String userId, String confirmId) throws AdminException {
+		if (blank(userId)) throw new AdminException("회원 아이디가 없습니다.");
+		// 되돌릴 수 없는 작업이라 관리자가 아이디를 직접 한 번 더 입력해야 한다
+		if (confirmId == null || !confirmId.trim().equals(userId.trim()))
+			throw new AdminException("확인용 아이디가 일치하지 않습니다. 삭제할 회원 아이디를 정확히 입력해주세요.");
+		DeleteResult result = repository.deleteUserCascade(userId.trim());
+		if (result == null) throw new AdminException("해당 회원을 찾을 수 없습니다.");
+		return result;
 	}
 
 	@Override

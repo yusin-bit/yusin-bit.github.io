@@ -13,6 +13,7 @@ import main.java.com.rental.admin.dto.AdminDtos.LogRow;
 import main.java.com.rental.admin.dto.AdminDtos.NoticeRow;
 import main.java.com.rental.admin.dto.AdminDtos.StatRow;
 import main.java.com.rental.admin.dto.AdminDtos.CategoryRow;
+import main.java.com.rental.admin.dto.AdminDtos.DeleteResult;
 import main.java.com.rental.admin.dto.AdminDtos.ItemRow;
 import main.java.com.rental.admin.dto.AdminDtos.PostRow;
 import main.java.com.rental.admin.dto.AdminDtos.RentalRow;
@@ -72,11 +73,16 @@ public class AdminRepositoryImpl implements AdminRepository {
 	@Override
 	public List<UserRow> selectUsers() throws AdminException {
 		String sql = """
-				SELECT u.ID, u.NickName, u.Name, u.Phone, u.Suspended, u.SuspendReason,
+				SELECT u.ID, u.NickName, u.Name, u.Phone, u.Suspended, u.SuspendReason, u.Withdrawn,
 				       (SELECT COUNT(*) FROM Item i WHERE i.LenderID = u.ID) AS itemCount,
-				       (SELECT COUNT(*) FROM Rental r WHERE r.BorrowerID = u.ID) AS rentalCount
+				       (SELECT COUNT(*) FROM Rental r WHERE r.BorrowerID = u.ID) AS rentalCount,
+				       (SELECT COUNT(*) FROM Post p JOIN Item i ON i.ItemNum = p.ItemNum WHERE i.LenderID = u.ID) AS postCount,
+				       (SELECT COUNT(*) FROM Rental r JOIN Post p ON p.PostNum = r.PostNum JOIN Item i ON i.ItemNum = p.ItemNum
+				        WHERE i.LenderID = u.ID) AS lentCount,
+				       (SELECT COUNT(*) FROM Rental r JOIN Post p ON p.PostNum = r.PostNum JOIN Item i ON i.ItemNum = p.ItemNum
+				        WHERE (r.BorrowerID = u.ID OR i.LenderID = u.ID) AND r.Status IN (101, 110, 200, 201, 210)) AS activeCount
 				FROM User u
-				ORDER BY u.ID
+				ORDER BY u.Withdrawn, u.ID
 				""";
 		List<UserRow> list = new ArrayList<>();
 		try (Connection con = DBManager.getConnection();
@@ -85,7 +91,8 @@ public class AdminRepositoryImpl implements AdminRepository {
 			while (rs.next()) {
 				list.add(new UserRow(rs.getString("ID"), rs.getString("NickName"), rs.getString("Name"),
 						rs.getString("Phone"), rs.getInt("itemCount"), rs.getInt("rentalCount"),
-						rs.getBoolean("Suspended"), rs.getString("SuspendReason")));
+						rs.getBoolean("Suspended"), rs.getString("SuspendReason"), rs.getInt("postCount"),
+						rs.getInt("lentCount"), rs.getInt("activeCount"), rs.getBoolean("Withdrawn")));
 			}
 		} catch (SQLException e) {
 			throw new AdminException();
@@ -96,7 +103,7 @@ public class AdminRepositoryImpl implements AdminRepository {
 	@Override
 	public int resetUserPassword(String userId, String newPassword) throws AdminException {
 		try (Connection con = DBManager.getConnection();
-				PreparedStatement ps = con.prepareStatement("UPDATE User SET PassWord = ? WHERE ID = ?")) {
+				PreparedStatement ps = con.prepareStatement("UPDATE User SET PassWord = ? WHERE ID = ? AND Withdrawn = FALSE")) {
 			ps.setString(1, PasswordHasher.hash(newPassword));
 			ps.setString(2, userId);
 			return ps.executeUpdate();
@@ -210,6 +217,7 @@ public class AdminRepositoryImpl implements AdminRepository {
 		String sql = """
 				UPDATE Item i SET i.Status = TRUE
 				WHERE i.ItemNum = ? AND i.Status = FALSE
+				  AND NOT EXISTS (SELECT 1 FROM User u WHERE u.ID = i.LenderID AND u.Withdrawn = TRUE)
 				  AND NOT EXISTS (SELECT 1 FROM Rental r JOIN Post p ON p.PostNum = r.PostNum
 				                  WHERE p.ItemNum = i.ItemNum AND r.Status IN (101, 110, 200, 201, 210))
 				""";
@@ -364,20 +372,112 @@ public class AdminRepositoryImpl implements AdminRepository {
 
 	@Override
 	public int setUserSuspended(String userId, boolean suspended, String reason) throws AdminException {
-		return update(null, null, "UPDATE User SET Suspended = ?, SuspendReason = ? WHERE ID = ?",
+		return update(null, null, "UPDATE User SET Suspended = ?, SuspendReason = ? WHERE ID = ? AND Withdrawn = FALSE",
 				suspended, suspended ? reason : null, userId);
 	}
 
 	@Override
 	public int updateUser(String userId, String nickName, String name, String phone) throws AdminException {
 		return update("이미 다른 회원이 쓰는 전화번호입니다.", null,
-				"UPDATE User SET NickName = ?, Name = ?, Phone = ? WHERE ID = ?", nickName, name, phone, userId);
+				"UPDATE User SET NickName = ?, Name = ?, Phone = ? WHERE ID = ? AND Withdrawn = FALSE", nickName, name, phone, userId);
+	}
+
+	// 이 회원 물품에 달린 게시글 번호 (대여 기록의 "빌려준 쪽")
+	private static final String POSTS_OF_USER = "SELECT p.PostNum FROM Post p JOIN Item i ON i.ItemNum = p.ItemNum WHERE i.LenderID = ?";
+
+	/**
+	 * 탈퇴·완전 삭제 공통 준비: 회원 행과 관련 게시글·대여 행을 잠그고, 진행 중인 대여가 있으면 막는다.
+	 * (잠그는 동안 다른 요청이 새 신청·승인을 끼워 넣지 못한다)
+	 * @return 회원의 Withdrawn 값, 회원이 없으면 null
+	 */
+	private Boolean lockUserForRemoval(Connection con, String userId) throws SQLException, AdminException {
+		Boolean withdrawn;
+		try (PreparedStatement ps = con.prepareStatement("SELECT Withdrawn FROM User WHERE ID = ? FOR UPDATE")) {
+			ps.setString(1, userId);
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) return null;
+				withdrawn = rs.getBoolean(1);
+			}
+		}
+		try (PreparedStatement ps = con.prepareStatement(POSTS_OF_USER + " FOR UPDATE")) {
+			ps.setString(1, userId);
+			ps.executeQuery().close();
+		}
+		try (PreparedStatement ps = con.prepareStatement("SELECT RentalNum FROM Rental WHERE BorrowerID = ? FOR UPDATE")) {
+			ps.setString(1, userId);
+			ps.executeQuery().close();
+		}
+		try (PreparedStatement ps = con.prepareStatement("SELECT COUNT(*) FROM Rental WHERE Status IN (101, 110, 200, 201, 210) "
+				+ "AND (BorrowerID = ? OR PostNum IN (" + POSTS_OF_USER + "))")) {
+			ps.setString(1, userId);
+			ps.setString(2, userId);
+			try (ResultSet rs = ps.executeQuery()) {
+				rs.next();
+				int active = rs.getInt(1);
+				if (active > 0)
+					throw new AdminException("진행 중인 대여가 " + active + "건 있습니다. 대여 관리에서 먼저 강제 완료 또는 강제 취소해주세요.");
+			}
+		}
+		return withdrawn;
+	}
+
+	private static int execute(Connection con, String sql, Object... params) throws SQLException {
+		try (PreparedStatement ps = con.prepareStatement(sql)) {
+			for (int i = 0; i < params.length; i++) ps.setObject(i + 1, params[i]);
+			return ps.executeUpdate();
+		}
 	}
 
 	@Override
-	public int deleteUser(String userId) throws AdminException {
-		return update(null, "물품이나 대여 내역이 있는 회원은 삭제할 수 없습니다. 대신 이용 정지를 사용하세요.",
-				"DELETE FROM User WHERE ID = ?", userId);
+	public int withdrawUser(String userId, String placeholderPhone, String randomPasswordHash) throws AdminException {
+		try (Connection con = DBManager.getConnection()) {
+			con.setAutoCommit(false);
+			try {
+				Boolean withdrawn = lockUserForRemoval(con, userId);
+				if (withdrawn == null) { con.rollback(); return 0; }
+				if (withdrawn) { con.rollback(); throw new AdminException("이미 탈퇴 처리된 회원입니다."); }
+				// 승인 대기 신청은 양쪽 모두 거절 처리 (끝난 기록은 그대로 둔다)
+				execute(con, "UPDATE Rental SET Status = 102 WHERE Status = 100 AND (BorrowerID = ? OR PostNum IN (" + POSTS_OF_USER + "))",
+						userId, userId);
+				// 물품은 남기되 대여 목록에서 빠지도록 대여 불가로
+				execute(con, "UPDATE Item SET Status = FALSE WHERE LenderID = ?", userId);
+				// 개인정보를 가리고, 비밀번호를 아무도 모르는 값으로 바꿔 로그인·재설정을 막는다
+				int changed = execute(con, """
+						UPDATE User SET Withdrawn = TRUE, Suspended = TRUE, SuspendReason = '탈퇴 처리된 계정',
+						       Name = '탈퇴회원', NickName = '탈퇴회원', Phone = ?, PassWord = ?
+						WHERE ID = ?
+						""", placeholderPhone, randomPasswordHash, userId);
+				con.commit();
+				return changed;
+			} catch (SQLException | AdminException e) {
+				con.rollback();
+				throw e;
+			}
+		} catch (SQLException e) {
+			throw new AdminException();
+		}
+	}
+
+	@Override
+	public DeleteResult deleteUserCascade(String userId) throws AdminException {
+		try (Connection con = DBManager.getConnection()) {
+			con.setAutoCommit(false);
+			try {
+				if (lockUserForRemoval(con, userId) == null) { con.rollback(); return null; }
+				// 참조하는 쪽부터: 대여 기록(이 회원이 빌린 것 + 이 회원 물품을 남이 빌린 것) → 게시글 → 물품 → 회원
+				int rentals = execute(con, "DELETE FROM Rental WHERE BorrowerID = ? OR PostNum IN (" + POSTS_OF_USER + ")", userId, userId);
+				int posts = execute(con, "DELETE FROM Post WHERE ItemNum IN (SELECT ItemNum FROM Item WHERE LenderID = ?)", userId);
+				int items = execute(con, "DELETE FROM Item WHERE LenderID = ?", userId);
+				execute(con, "DELETE FROM User WHERE ID = ?", userId);
+				con.commit();
+				return new DeleteResult(items, posts, rentals);
+			} catch (SQLException | AdminException e) {
+				con.rollback();
+				throw e;
+			}
+		} catch (SQLException e) {
+			throw new AdminException();
+		}
 	}
 
 	@Override

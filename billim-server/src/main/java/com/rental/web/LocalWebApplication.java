@@ -36,6 +36,7 @@ import main.java.com.rental.admin.dto.AdminDtos.PostRow;
 import main.java.com.rental.admin.dto.AdminDtos.RentalRow;
 import main.java.com.rental.admin.dto.AdminDtos.Summary;
 import main.java.com.rental.admin.dto.AdminDtos.UserRow;
+import main.java.com.rental.admin.dto.AdminDtos.DeleteResult;
 import main.java.com.rental.admin.service.AdminService;
 import main.java.com.rental.admin.service.AdminServiceImpl;
 import main.java.com.rental.common.exception.NotFoundException;
@@ -197,11 +198,22 @@ public class LocalWebApplication {
             adminService.updateUser(form.getOrDefault("userId", "").trim(), form.get("nickname"), form.get("name"), form.get("phone"));
             return "회원 정보를 수정했습니다.";
         }));
+        api(server, "/api/admin/users/withdraw", ex -> adminAction(ex, form -> {
+            String userId = form.getOrDefault("userId", "").trim();
+            adminService.withdrawUser(userId);
+            endSessionsOf(userId, null);
+            return userId + " 회원을 탈퇴 처리했습니다. 대여 기록은 남고, 개인정보는 가려졌습니다.";
+        }));
         api(server, "/api/admin/users/delete", ex -> adminAction(ex, form -> {
             String userId = form.getOrDefault("userId", "").trim();
-            adminService.deleteUser(userId);
+            DeleteResult r = adminService.deleteUser(userId, form.get("confirmId"));
             endSessionsOf(userId, null);
-            return userId + " 회원을 삭제했습니다.";
+            loginFailures.reset(userId.toLowerCase());
+            // 활동 기록에 함께 지워진 건수도 남긴다
+            String counts = "items=" + r.items() + " posts=" + r.posts() + " rentals=" + r.rentals();
+            Object detail = ex.getAttribute("auditDetail");
+            ex.setAttribute("auditDetail", (detail == null || detail.toString().isEmpty() ? "" : detail + " ") + counts);
+            return userId + " 회원을 완전히 삭제했습니다. (물품 " + r.items() + "개, 대여 글 " + r.posts() + "개, 대여 기록 " + r.rentals() + "건 함께 삭제)";
         }));
         api(server, "/api/admin/posts/update", ex -> adminAction(ex, form -> {
             String title = form.getOrDefault("title", "").trim(), content = form.getOrDefault("content", "").trim();
@@ -1091,6 +1103,10 @@ public class LocalWebApplication {
                     .append(",\"rentalCount\":").append(u.rentalCount())
                     .append(",\"suspended\":").append(u.suspended())
                     .append(",\"suspendReason\":\"").append(json(u.suspendReason())).append('"')
+                    .append(",\"postCount\":").append(u.postCount())
+                    .append(",\"lentCount\":").append(u.lentCount())
+                    .append(",\"activeCount\":").append(u.activeCount())
+                    .append(",\"withdrawn\":").append(u.withdrawn())
                     .append(",\"locked\":").append(loginFailures.isBlocked(u.id().toLowerCase()))
                     .append(",\"sessions\":").append(sessions.values().stream().filter(s -> s.user().getId().equals(u.id())).count())
                     .append('}');

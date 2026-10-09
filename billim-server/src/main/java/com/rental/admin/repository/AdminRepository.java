@@ -5,6 +5,7 @@ import java.util.List;
 import main.java.com.rental.admin.dto.AdminDtos.AdminAccount;
 import main.java.com.rental.admin.dto.AdminDtos.AdminRow;
 import main.java.com.rental.admin.dto.AdminDtos.CategoryRow;
+import main.java.com.rental.admin.dto.AdminDtos.DeleteResult;
 import main.java.com.rental.admin.dto.AdminDtos.ItemRow;
 import main.java.com.rental.admin.dto.AdminDtos.LogRow;
 import main.java.com.rental.admin.dto.AdminDtos.NoticeRow;
@@ -30,8 +31,19 @@ public interface AdminRepository {
 
 	int updateUser(String userId, String nickName, String name, String phone) throws AdminException;
 
-	/** 물품·대여 내역이 없는 회원만 삭제된다 (있으면 예외) */
-	int deleteUser(String userId) throws AdminException;
+	/**
+	 * 탈퇴 처리: 기록은 남기고 개인정보를 가린 뒤 로그인을 막는다.
+	 * 승인 대기 신청은 거절하고, 물품은 대여 불가로 바꾼다. 진행 중인 대여가 있으면 예외.
+	 * @return 0 = 회원 없음
+	 */
+	int withdrawUser(String userId, String placeholderPhone, String randomPasswordHash) throws AdminException;
+
+	/**
+	 * 완전 삭제: 회원과 그 회원의 물품·대여 글·관련 대여 기록(양쪽)을 한 트랜잭션으로 지운다.
+	 * 진행 중인 대여가 있으면 예외.
+	 * @return null = 회원 없음
+	 */
+	DeleteResult deleteUserCascade(String userId) throws AdminException;
 
 	// ---- 게시글
 	List<PostRow> selectPosts() throws AdminException;

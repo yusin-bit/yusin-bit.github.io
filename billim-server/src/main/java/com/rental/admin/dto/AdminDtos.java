@@ -14,9 +14,15 @@ public final class AdminDtos {
 	public record Summary(int users, int items, int posts, int rentals,
 			int requested, int inProgress, int completed, int rejected) { }
 
-	/** 회원 목록 한 줄 */
+	/**
+	 * 회원 목록 한 줄
+	 * rentalCount = 이 회원이 신청한 대여, lentCount = 이 회원 물품에 들어온 대여, activeCount = 둘 중 진행 중(승인~반납 확인 대기)
+	 */
 	public record UserRow(String id, String nickName, String name, String phone, int itemCount, int rentalCount,
-			boolean suspended, String suspendReason) { }
+			boolean suspended, String suspendReason, int postCount, int lentCount, int activeCount, boolean withdrawn) { }
+
+	/** 회원 완전 삭제 때 함께 지워진 건수 */
+	public record DeleteResult(int items, int posts, int rentals) { }
 
 	/** 관리자 계정 */
 	public record AdminRow(String id, String name) { }
