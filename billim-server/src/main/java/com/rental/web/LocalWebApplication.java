@@ -52,6 +52,10 @@ import main.java.com.rental.post.service.PostService;
 import main.java.com.rental.post.service.PostServiceImpl;
 import main.java.com.rental.item.dto.ItemCreateRequest;
 import main.java.com.rental.item.entity.Item;
+import main.java.com.rental.item.repository.ItemImageRepository;
+import main.java.com.rental.item.repository.ItemImageRepository.ImageData;
+import main.java.com.rental.item.repository.ItemImageRepository.ImageInfo;
+import main.java.com.rental.item.repository.ItemImageRepositoryImpl;
 import main.java.com.rental.item.service.ItemService;
 import main.java.com.rental.item.service.ItemServiceImpl;
 import main.java.com.rental.rental.dto.RentalCreateRequest;
@@ -114,6 +118,7 @@ public class LocalWebApplication {
     private final CategoryServiceImpl categoryService = new CategoryServiceImpl();
     private final PostService postService = PostServiceImpl.getInstance();
     private final ItemService itemService = ItemServiceImpl.getInstance();
+    private final ItemImageRepository itemImages = new ItemImageRepositoryImpl();
     private final RentalServiceImpl rentalService = RentalServiceImpl.getInstance();
 
     public static void main(String[] args) throws Exception {
@@ -143,6 +148,14 @@ public class LocalWebApplication {
         api(server, "/api/items/create", this::createItem);
         api(server, "/api/items/update", this::updateItem);
         api(server, "/api/items/delete", this::deleteItem);
+        // 물품 사진: GET 은 <img> 가 토큰을 보낼 수 없어 공개, 올리기·지우기는 물품 주인만
+        api(server, "/api/items/image", this::itemImage);
+        api(server, "/api/items/image/delete", this::deleteItemImage);
+        api(server, "/api/admin/items/image", this::adminUploadItemImage);
+        api(server, "/api/admin/items/image/delete", ex -> adminAction(ex, form -> {
+            if (itemImages.delete(intParam(form, "itemNum")) == 0) throw new IllegalArgumentException("등록된 사진이 없습니다.");
+            return "물품 사진을 삭제했습니다.";
+        }));
         api(server, "/api/categories", this::categories);
         api(server, "/api/rentals/current", this::currentRentals);
         api(server, "/api/rentals/action", this::rentalAction);
@@ -634,6 +647,7 @@ public class LocalWebApplication {
         if (!loggedIn(exchange)) return;
         try {
             List<AvailablePost> posts = postService.selectAvailablePost();
+            Map<Integer, ImageInfo> images = imagesByPost();
             StringBuilder json = new StringBuilder("{\"ok\":true,\"posts\":[");
             for (int i = 0; i < posts.size(); i++) {
                 AvailablePost post = posts.get(i);
@@ -645,7 +659,8 @@ public class LocalWebApplication {
                     .append("\",\"returnDate\":\"").append(json(post.getReturnDate()))
                     .append("\",\"addr\":\"").append(json(post.getAddr()))
                     .append("\",\"itemName\":\"").append(json(post.getItemName()))
-                    .append("\",\"category\":\"").append(json(post.getCategory())).append("\"}");
+                    .append("\",\"category\":\"").append(json(post.getCategory())).append('"')
+                    .append(imageFields(images.get(post.getPostNum()))).append('}');
             }
             sendJson(exchange, 200, json.append("]}").toString());
         } catch (NotFoundException empty) {
@@ -661,6 +676,7 @@ public class LocalWebApplication {
         try {
             String userId = Session.getInstance().getLoginUser().getId();
             List<Item> items = itemService.selectByUserId(userId);
+            Map<Integer, ImageInfo> images = imagesByItem();
             StringBuilder json = new StringBuilder("{\"ok\":true,\"items\":[");
             for (int i = 0; i < items.size(); i++) {
                 Item item = items.get(i);
@@ -669,7 +685,7 @@ public class LocalWebApplication {
                     .append(",\"itemName\":\"").append(json(item.getItemName()))
                     .append("\",\"available\":").append(item.isStatus())
                     .append(",\"smallCategoryCode\":\"").append(json(item.getSmallCategoryCode()))
-                    .append("\"}");
+                    .append('"').append(imageFields(images.get(item.getItemNum()))).append('}');
             }
             sendJson(exchange, 200, json.append("]}").toString());
         } catch (Exception e) {
@@ -730,6 +746,136 @@ public class LocalWebApplication {
         }
     }
 
+    // ---------- 물품 사진 ----------
+
+    /** GET: 사진 보기(공개) / POST: 물품 주인이 사진 올리기 (본문 = JPEG·PNG 파일 그대로, ?itemNum=) */
+    private void itemImage(HttpExchange exchange) throws IOException {
+        if ("GET".equalsIgnoreCase(exchange.getRequestMethod()) || "HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
+            sendItemImage(exchange);
+            return;
+        }
+        if (!method(exchange, "POST")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            int itemNum = intParam(queryParams(exchange), "itemNum");
+            String userId = Session.getInstance().getLoginUser().getId();
+            if (!userId.equals(itemImages.ownerOf(itemNum)))
+                throw new IllegalArgumentException("본인이 등록한 물품에만 사진을 올릴 수 있습니다.");
+            itemImages.save(itemNum, ImageProcessor.toJpeg(readImageBody(exchange)), "image/jpeg", null);
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"물품 사진이 등록되었습니다.\"}");
+        } catch (IllegalArgumentException | main.java.com.rental.common.exception.ItemException e) {
+            sendError(exchange, 400, message(e));
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void sendItemImage(HttpExchange exchange) throws IOException {
+        try {
+            ImageData image = itemImages.find(intParam(queryParams(exchange), "itemNum"));
+            if (image == null) {
+                sendError(exchange, 404, "등록된 사진이 없습니다.");
+                return;
+            }
+            var headers = exchange.getResponseHeaders();
+            headers.set("Content-Type", image.contentType());
+            // 주소에 수정 시각(v=)이 들어가므로 오래 캐시해도 사진을 바꾸면 새로 받는다
+            headers.set("Cache-Control", "public, max-age=604800");
+            headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+            headers.set("Content-Security-Policy", "default-src 'none'; sandbox");
+            addSecurityHeaders(exchange);
+            boolean head = "HEAD".equalsIgnoreCase(exchange.getRequestMethod());
+            exchange.sendResponseHeaders(200, head ? -1 : image.data().length);
+            if (head) {
+                exchange.close();
+                return;
+            }
+            try (OutputStream output = exchange.getResponseBody()) { output.write(image.data()); }
+        } catch (IllegalArgumentException e) {
+            sendError(exchange, 400, message(e));
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    private void deleteItemImage(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (!loggedIn(exchange)) return;
+        try {
+            int itemNum = intParam(readForm(exchange), "itemNum");
+            String userId = Session.getInstance().getLoginUser().getId();
+            if (!userId.equals(itemImages.ownerOf(itemNum)))
+                throw new IllegalArgumentException("본인이 등록한 물품의 사진만 지울 수 있습니다.");
+            itemImages.delete(itemNum);
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"물품 사진을 삭제했습니다.\"}");
+        } catch (Exception e) {
+            sendError(exchange, 400, message(e));
+        }
+    }
+
+    /** 관리자: 아무 물품에나 사진 등록 (?itemNum=&credit= 출처 표기, 자유 이용 사진 등록용) */
+    private void adminUploadItemImage(HttpExchange exchange) throws IOException {
+        if (!method(exchange, "POST")) return;
+        if (requireAdmin(exchange) == null) return;
+        try {
+            Map<String, String> query = queryParams(exchange);
+            int itemNum = intParam(query, "itemNum");
+            exchange.setAttribute("auditDetail", "itemNum=" + itemNum);
+            String credit = query.getOrDefault("credit", "").strip();
+            if (credit.length() > 255) throw new IllegalArgumentException("출처 표기는 255자 이내로 입력해주세요.");
+            if (itemImages.ownerOf(itemNum) == null) throw new IllegalArgumentException("존재하지 않는 물품입니다.");
+            itemImages.save(itemNum, ImageProcessor.toJpeg(readImageBody(exchange)), "image/jpeg", credit.isEmpty() ? null : credit);
+            sendJson(exchange, 200, "{\"ok\":true,\"message\":\"물품 사진을 등록했습니다.\"}");
+        } catch (IllegalArgumentException | main.java.com.rental.common.exception.ItemException e) {
+            sendError(exchange, 400, message(e));
+        } catch (Exception e) {
+            serverError(exchange, e);
+        }
+    }
+
+    /** 사진 업로드 본문: Content-Type 이 이미지여야 하고, 일반 요청(16KB)과 따로 512KB 까지 */
+    private static byte[] readImageBody(HttpExchange exchange) throws IOException {
+        String type = String.valueOf(exchange.getRequestHeaders().getFirst("Content-Type")).toLowerCase();
+        if (!type.startsWith("image/jpeg") && !type.startsWith("image/png"))
+            throw new IllegalArgumentException("JPG 또는 PNG 사진만 올릴 수 있습니다.");
+        InputStream body = exchange.getRequestBody();
+        byte[] raw = body.readNBytes(ImageProcessor.MAX_UPLOAD_BYTES + 1);
+        if (raw.length > ImageProcessor.MAX_UPLOAD_BYTES) {
+            // 남은 본문을 (8MB 까지) 읽어 버려야 브라우저가 오류 응답을 끝까지 받는다
+            long skipped = 0;
+            byte[] sink = new byte[64 * 1024];
+            for (int n; skipped < 8L * 1024 * 1024 && (n = body.read(sink)) > 0;) skipped += n;
+            throw new IllegalArgumentException("사진은 512KB 이하만 올릴 수 있습니다.");
+        }
+        return raw;
+    }
+
+    /** 목록 JSON 에 붙이는 사진 정보: ,"imageItemNum":1,"imageVersion":123,"imageCredit":"..." (사진 없으면 version 0) */
+    private static String imageFields(ImageInfo info) {
+        if (info == null) return ",\"imageVersion\":0";
+        return ",\"imageItemNum\":" + info.itemNum() + ",\"imageVersion\":" + info.version()
+                + ",\"imageCredit\":\"" + json(info.credit()) + '"';
+    }
+
+    /** 사진 정보 조회가 실패해도 목록은 보여준다 */
+    private Map<Integer, ImageInfo> imagesByPost() {
+        try {
+            return itemImages.infoByPost();
+        } catch (Exception e) {
+            System.err.println("[images] " + message(e));
+            return Map.of();
+        }
+    }
+
+    private Map<Integer, ImageInfo> imagesByItem() {
+        try {
+            return itemImages.infoByItem();
+        } catch (Exception e) {
+            System.err.println("[images] " + message(e));
+            return Map.of();
+        }
+    }
+
     private void categories(HttpExchange exchange) throws IOException {
         if (!method(exchange, "GET")) return;
         if (!loggedIn(exchange)) return;
@@ -775,6 +921,7 @@ public class LocalWebApplication {
         if (!loggedIn(exchange)) return;
         try {
             List<RentalDetail> rentals = rentalService.selectRelatedRentalHistory();
+            Map<Integer, ImageInfo> images = imagesByPost();
             String loginId = Session.getInstance().getLoginUser().getId();
             StringBuilder json = new StringBuilder("{\"ok\":true,\"rentals\":[");
             for (int i = 0; i < rentals.size(); i++) {
@@ -791,7 +938,8 @@ public class LocalWebApplication {
                     .append("\",\"returnDate\":\"").append(json(rental.getReturnDate()))
                     .append("\",\"addr\":\"").append(json(rental.getAddr()))
                     .append("\",\"status\":").append(rental.getStatus().getCode())
-                    .append(",\"statusName\":\"").append(json(rental.getStatus().getName())).append("\"}");
+                    .append(",\"statusName\":\"").append(json(rental.getStatus().getName())).append('"')
+                    .append(imageFields(images.get(rental.getPostNum()))).append('}');
             }
             sendJson(exchange, 200, json.append("]}").toString());
         } catch (Exception e) {
@@ -980,6 +1128,7 @@ public class LocalWebApplication {
             } catch (NotFoundException empty) {
                 available = List.of();
             }
+            Map<Integer, ImageInfo> images = imagesByPost();
             StringBuilder body = new StringBuilder("{\"ok\":true,\"posts\":[");
             boolean first = true;
             for (AvailablePost post : available) {
@@ -993,7 +1142,8 @@ public class LocalWebApplication {
                     .append("\",\"returnDate\":\"").append(json(post.getReturnDate()))
                     .append("\",\"addr\":\"").append(json(post.getAddr()))
                     .append("\",\"itemName\":\"").append(json(post.getItemName()))
-                    .append("\",\"category\":\"").append(json(post.getCategory())).append("\"}");
+                    .append("\",\"category\":\"").append(json(post.getCategory())).append('"')
+                    .append(imageFields(images.get(post.getPostNum()))).append('}');
             }
             sendJson(exchange, 200, body.append("]}").toString());
         } catch (IllegalArgumentException e) {
@@ -1322,6 +1472,7 @@ public class LocalWebApplication {
         if (requireAdmin(exchange) == null) return;
         try {
             List<ItemRow> items = adminService.items();
+            Map<Integer, ImageInfo> images = imagesByItem();
             StringBuilder body = new StringBuilder("{\"ok\":true,\"items\":[");
             for (int i = 0; i < items.size(); i++) {
                 ItemRow it = items.get(i);
@@ -1332,7 +1483,8 @@ public class LocalWebApplication {
                     .append("\",\"category\":\"").append(json(it.bigCategory() + " · " + it.smallCategory()))
                     .append("\",\"available\":").append(it.available())
                     .append(",\"postCount\":").append(it.postCount())
-                    .append(",\"activeRentals\":").append(it.activeRentals()).append('}');
+                    .append(",\"activeRentals\":").append(it.activeRentals())
+                    .append(imageFields(images.get(it.itemNum()))).append('}');
             }
             sendJson(exchange, 200, body.append("]}").toString());
         } catch (Exception e) {
@@ -1490,7 +1642,7 @@ public class LocalWebApplication {
             if (type.startsWith("text/html")) {
                 // 같은 서버의 스크립트·스타일·API 만 허용, 다른 사이트에 iframe 으로 넣지 못하게
                 exchange.getResponseHeaders().set("Content-Security-Policy",
-                        "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; "
+                        "default-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; "
                                 + "form-action 'self'; frame-ancestors 'none'");
             }
             if (head) {
