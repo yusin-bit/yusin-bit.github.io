@@ -2,7 +2,9 @@
 # 1단계: src 전체를 javac 로 컴파일
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /build
-ADD https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.4.0/mysql-connector-j-8.4.0.jar lib/mysql-connector-j-8.4.0.jar
+# MySQL 드라이버는 저장소에 포함된 파일을 쓴다. (Render 빌드 서버에서 Maven Central 이 429(요청 과다)로 다운로드를 막아 배포가 실패했음)
+# 파일이 바뀌지 않았는지 공식 sha256 으로 확인
+COPY lib/mysql-connector-j-8.4.0.jar lib/mysql-connector-j-8.4.0.jar
 RUN echo "d77962877d010777cff997015da90ee689f0f4bb76848340e1488f2b83332af5  lib/mysql-connector-j-8.4.0.jar" | sha256sum -c -
 COPY src ./src
 RUN mkdir classes && javac -encoding UTF-8 -cp lib/mysql-connector-j-8.4.0.jar -d classes $(find src -name "*.java")
