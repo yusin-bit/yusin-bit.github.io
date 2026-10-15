@@ -1635,6 +1635,9 @@ public class LocalWebApplication {
             String name = file.getFileName().toString();
             String type = name.endsWith(".css") ? "text/css; charset=utf-8"
                     : name.endsWith(".js") ? "application/javascript; charset=utf-8"
+                    : name.endsWith(".png") ? "image/png"
+                    : name.endsWith(".ico") ? "image/x-icon"
+                    : name.endsWith(".webmanifest") ? "application/manifest+json; charset=utf-8"
                     : "text/html; charset=utf-8";
             exchange.getResponseHeaders().set("Content-Type", type);
             exchange.getResponseHeaders().set("Cache-Control", "no-store");

@@ -1,0 +1,16 @@
+{
+  "name": "빌림 — 대여 시스템",
+  "short_name": "빌림",
+  "description": "물건을 빌려주고 빌리는 대여 시스템 (KOSTA 미니 프로젝트)",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7f5",
+  "theme_color": "#0e5b43",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
